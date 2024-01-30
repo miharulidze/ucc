@@ -1,0 +1,31 @@
+#
+# Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+
+if TL_SPIN_ENABLED
+
+mcast =                                 \
+	../mlx5/mcast/tl_mlx5_mcast.h               \
+	../mlx5/mcast/tl_mlx5_mcast_rcache.h        \
+	../mlx5/mcast/tl_mlx5_mcast_rcache.c        \
+	../mlx5/mcast/p2p/ucc_tl_mlx5_mcast_p2p.h   \
+	../mlx5/mcast/p2p/ucc_tl_mlx5_mcast_p2p.c   \
+	../mlx5/mcast/tl_mlx5_mcast_progress.h      \
+	../mlx5/mcast/tl_mlx5_mcast_helper.h        \
+	../mlx5/mcast/tl_mlx5_mcast_helper.c
+
+sources =         \
+	tl_spin.h \
+	tl_spin.c \
+	$(mcast)
+
+module_LTLIBRARIES = libucc_tl_spin.la
+libucc_tl_spin_la_SOURCES  = $(sources)
+libucc_tl_spin_la_CPPFLAGS = $(AM_CPPFLAGS) $(BASE_CPPFLAGS)
+libucc_tl_spin_la_CFLAGS   = $(BASE_CFLAGS)
+libucc_tl_spin_la_LDFLAGS  = -version-info $(SOVERSION) --as-needed
+libucc_tl_spin_la_LIBADD   = $(UCC_TOP_BUILDDIR)/src/libucc.la $(IBVERBS_LIBADD) $(RDMACM_LIBADD)
+
+include $(top_srcdir)/config/module.am
+
+endif

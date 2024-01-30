@@ -8,7 +8,7 @@
 #define TL_MLX5_MCAST_HELPER_H_
 #include "tl_mlx5_mcast_progress.h"
 #include "utils/ucc_math.h"
-#include "tl_mlx5.h"
+//#include "tl_mlx5.h"
 
 static inline ucc_status_t ucc_tl_mlx5_mcast_poll_send(ucc_tl_mlx5_mcast_coll_comm_t *comm)
 {
