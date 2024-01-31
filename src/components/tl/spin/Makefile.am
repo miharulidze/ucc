@@ -4,7 +4,7 @@
 
 if TL_SPIN_ENABLED
 
-mcast =                                 \
+mcast =                                         \
 	../mlx5/mcast/tl_mlx5_mcast.h               \
 	../mlx5/mcast/tl_mlx5_mcast_rcache.h        \
 	../mlx5/mcast/tl_mlx5_mcast_rcache.c        \
@@ -14,9 +14,14 @@ mcast =                                 \
 	../mlx5/mcast/tl_mlx5_mcast_helper.h        \
 	../mlx5/mcast/tl_mlx5_mcast_helper.c
 
-sources =         \
-	tl_spin.h \
-	tl_spin.c \
+sources =             \
+	tl_spin.h         \
+	tl_spin.c         \
+	tl_spin_lib.c     \
+	tl_spin_context.c \
+	tl_spin_team.c    \
+	tl_spin_coll.h    \
+	tl_spin_coll.c    \
 	$(mcast)
 
 module_LTLIBRARIES = libucc_tl_spin.la
