@@ -9,7 +9,7 @@ static ucc_status_t ucc_tl_spin_coll_finalize(ucc_coll_task_t *coll_task)
 {
     ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
 
-    tl_debug(UCC_TASK_LIB(task), "finalizing spin tl coll task ptr=%p gid=%u", 
+    tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", 
              task, task->dummy_task_id);
     ucc_mpool_put(task);
     return UCC_OK;
@@ -34,7 +34,7 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
         break;
     default:
         tl_debug(UCC_TASK_LIB(task),
-                 "collective %d is not supported by spin tl",
+                 "collective %d is not supported",
                  coll_args->args.coll_type);
         status = UCC_ERR_NOT_SUPPORTED;
         goto err;
@@ -42,8 +42,8 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
 
     task->dummy_task_id = tgid++;
 
-    tl_debug(UCC_TASK_LIB(task), "init spin tl coll task ptr=%p gid=%u", 
-    task, task->dummy_task_id);
+    tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", 
+             task, task->dummy_task_id);
     *task_h = &task->super;
     return status;
 
@@ -52,20 +52,37 @@ err:
     return status;
 }
 
-ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *task)
+ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
 {
-    task->status = UCC_INPROGRESS;
-    return UCC_OK;
+    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_team_t *team = UCC_TL_SPIN_TASK_TEAM(task);
+    coll_task->status = UCC_INPROGRESS;
+    tl_debug(UCC_TASK_LIB(task), "start coll task ptr=%p tgid=%u", 
+             task, task->dummy_task_id);
+    return ucc_progress_queue_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);
 }
 
-void ucc_tl_spin_bcast_progress(ucc_coll_task_t *task)
+void ucc_tl_spin_bcast_progress(ucc_coll_task_t *coll_task)
 {
-    task->status = UCC_OK;
+    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    coll_task->status = UCC_OK;
+    tl_debug(UCC_TASK_LIB(task), "progress coll task ptr=%p tgid=%u", 
+             task, task->dummy_task_id);
+}
+
+ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
+{
+    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    tl_debug(UCC_TASK_LIB(task), "finalize coll task ptr=%p tgid=%u", 
+             task, task->dummy_task_id);
+    ucc_mpool_put(task);
+    return UCC_OK;
 }
 
 ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t *task)
 {
     task->super.post     = ucc_tl_spin_bcast_start;
     task->super.progress = ucc_tl_spin_bcast_progress;
+    task->super.finalize = ucc_tl_spin_bcast_finalize;
     return UCC_OK;
 }

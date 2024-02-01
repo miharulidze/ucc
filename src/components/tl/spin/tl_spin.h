@@ -63,4 +63,6 @@ typedef struct ucc_tl_spin_task {
 #define UCC_TL_SPIN_TEAM_CTX(_team)                                            \
     (ucc_derived_of((_team)->super.super.context, ucc_tl_spin_context_t))
 
+#define UCC_TL_SPIN_TASK_TEAM(_task)                                                       \
+    (ucc_derived_of((_task)->super.team, ucc_tl_spin_team_t))
 #endif
