@@ -25,9 +25,9 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
     {"", "", NULL, ucc_offsetof(ucc_tl_spin_context_config_t, super),
      UCC_CONFIG_TYPE_TABLE(ucc_tl_context_config_table)},
 
-    {"DUMMY_PARAM", "42", "Dummy parameter that affects the behavior or sPIN context",
-     ucc_offsetof(ucc_tl_spin_context_config_t, dummy_param),
-     UCC_CONFIG_TYPE_UINT},
+    {"IB_DEV_NAME", "", "IB device that will be used for context creation",
+     ucc_offsetof(ucc_tl_spin_context_config_t, ib_dev_name),
+     UCC_CONFIG_TYPE_STRING},
 
     {NULL}};
 
