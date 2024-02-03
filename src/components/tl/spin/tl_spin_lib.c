@@ -26,7 +26,8 @@ ucc_status_t ucc_tl_spin_get_lib_attr(const ucc_base_lib_t *lib, /* NOLINT */
     ucc_tl_lib_attr_t *attr      = ucc_derived_of(base_attr, ucc_tl_lib_attr_t);
     attr->super.attr.thread_mode = UCC_THREAD_MULTIPLE;
     attr->super.attr.coll_types  = UCC_TL_SPIN_SUPPORTED_COLLS;
-    attr->super.flags            = 0;
+    attr->super.flags            = UCC_BASE_LIB_FLAG_SERVICE_TEAM_REQUIRED |
+                                   UCC_BASE_LIB_FLAG_CTX_SERVICE_TEAM_REQUIRED;
     if (base_attr->mask & UCC_BASE_LIB_ATTR_FIELD_MIN_TEAM_SIZE) {
         attr->super.min_team_size    = lib->min_team_size;
     }

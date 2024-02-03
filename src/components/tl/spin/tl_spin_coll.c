@@ -86,3 +86,15 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t *task)
     task->super.finalize = ucc_tl_spin_bcast_finalize;
     return UCC_OK;
 }
+
+void * ucc_tl_spin_coll_worker_tx(void *arg)
+{
+    printf("hello from tx thread\n");
+    return arg;
+}
+
+void * ucc_tl_spin_coll_worker_rx(void *arg)
+{
+    printf("hello from rx thread\n");
+    return arg;
+}

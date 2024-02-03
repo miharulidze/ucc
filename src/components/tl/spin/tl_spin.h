@@ -28,23 +28,46 @@ typedef struct ucc_tl_spin_lib_config {
 typedef struct ucc_tl_spin_context_config {
     ucc_tl_context_config_t super;
     char                   *ib_dev_name;
+    int                     n_mcgs;
+    int                     n_tx_workers;
+    int                     n_rx_workers;
+    int                     mcast_cq_depth;
+    int                     mcast_qp_depth;
+    int                     p2p_cq_depth;
+    int                     p2p_qp_depth;
 } ucc_tl_spin_context_config_t;
 
 typedef struct ucc_tl_spin_lib {
-    ucc_tl_lib_t            super;
+    ucc_tl_lib_t             super;
     ucc_tl_spin_lib_config_t cfg;
 } ucc_tl_spin_lib_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_lib_t, const ucc_base_lib_params_t *,
                   const ucc_base_config_t *);
 
+#define UCC_TL_SPIN_DEFAULT_PKEY 0 
+#define UCC_TL_SPIN_GID_TBL_MAX_ENTRIES 32
+typedef struct ucc_tl_spin_ib_dev_addr {
+    int           port_num;
+    enum ibv_mtu  mtu;
+    uint16_t      lid;
+    //uint8_t       gid_table_index;
+	//union ibv_gid gid;
+} ucc_tl_spin_ib_dev_addr_t;
+
+typedef struct ucc_tl_spin_qp_addr {
+    uint32_t                  qpn;
+    ucc_tl_spin_ib_dev_addr_t dev_addr;
+} ucc_tl_spin_qp_addr_t;
+
 typedef struct ucc_tl_spin_p2p_context {
-    struct ibv_context *dev;
-    struct ibv_pd      *pd;
+    struct ibv_context       *dev;
+    struct ibv_pd            *pd;
+    ucc_tl_spin_ib_dev_addr_t dev_addr;
 } ucc_tl_spin_p2p_context_t;
 
 /* Mostly resembles ucc_tl_mlx5_mcast_coll_context */
 typedef struct ucc_tl_spin_mcast_context {
-    struct ibv_context        *ctx;
+    struct ibv_context        *dev;
     struct ibv_pd             *pd;
     int                        max_qp_wr;
     int                        ib_port;
@@ -69,31 +92,41 @@ UCC_CLASS_DECLARE(ucc_tl_spin_context_t, const ucc_base_context_params_t *,
 
 typedef enum
 {
-    TL_SPIN_TEAM_STATE_INIT,
-    TL_SPIN_TEAM_STATE_POSTED,
-    TL_SPIN_TEAM_READY,
+    UCC_TL_SPIN_TEAM_STATE_INIT,
+    UCC_TL_SPIN_TEAM_STATE_POSTED,
+    UCC_TL_SPIN_TEAM_INITIALIZING_WORKERS,
+    UCC_TL_SPIN_TEAM_READY,
 } ucc_tl_spin_team_state_t;
 
+typedef enum
+{
+    UCC_TL_SPIN_WORKER_TYPE_CTRL,
+    UCC_TL_SPIN_WORKER_TYPE_TX,
+    UCC_TL_SPIN_WORKER_TYPE_RX
+} ucc_tl_spin_worker_type_t;
+
 typedef struct ucc_tl_spin_worker_info {
-    struct ibv_cq *cq;
-    struct ibv_qp *mcast_qps;
-    uint32_t       n_qps;
-    /* thread-local data wrt to the currently processed collective goes here  */
+    ucc_tl_spin_worker_type_t type;
+    pthread_t                 pthread;
+    struct ibv_cq            *cq;
+    struct ibv_qp           **qps;
+    struct rdma_cm_event    **mcast_events;
+    uint32_t                  n_mcgs;
+    /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
 
 #define UCC_TL_SPIN_MAX_MCGS    1
 #define UCC_TL_SPIN_P2P_QPS_NUM 2 // 2 QPs to have ring (TODO: check service collectives)
 #define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_MCGS))
 typedef struct ucc_tl_spin_team {
-    ucc_tl_team_t             super;
-    ucc_tl_spin_team_state_t  state;
-    struct ibv_cq            *cqs         [UCC_TL_SPIN_MAX_CQS_NUM];
-    pthread_t                *workers     [UCC_TL_SPIN_MAX_CQS_NUM];
-    ucc_tl_spin_worker_info_t descrs      [UCC_TL_SPIN_MAX_CQS_NUM];
-    struct ibv_qp            *p2p_qps     [UCC_TL_SPIN_P2P_QPS_NUM];
-    struct ibv_qp            *mcast_txqps [UCC_TL_SPIN_MAX_MCGS];
-    struct ibv_qp            *mcast_rxqps [UCC_TL_SPIN_MAX_MCGS];
-    struct ibv_ah            *ahs         [UCC_TL_SPIN_MAX_MCGS];
+    ucc_tl_team_t              super;
+    ucc_tl_spin_team_state_t   state;
+    ucc_tl_spin_worker_info_t *workers;
+    ucc_tl_spin_worker_info_t *ctrl_ctx;
+    ucc_team_t                *base_team;
+    ucc_subset_t               subset;
+    ucc_rank_t                 rank;
+    ucc_rank_t                 size;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
@@ -105,20 +138,20 @@ typedef struct ucc_tl_spin_task {
 
 #define UCC_TL_SPIN_SUPPORTED_COLLS (UCC_COLL_TYPE_BCAST)
 
-#define UCC_TL_SPIN_TEAM_LIB(_team)                                            \
+#define UCC_TL_SPIN_TEAM_LIB(_team)                                        \
     (ucc_derived_of((_team)->super.super.context->lib, ucc_tl_spin_lib_t))
 
-#define UCC_TL_SPIN_TEAM_CTX(_team)                                            \
+#define UCC_TL_SPIN_TEAM_CTX(_team)                                        \
     (ucc_derived_of((_team)->super.super.context, ucc_tl_spin_context_t))
 
-#define UCC_TL_SPIN_TASK_TEAM(_task)                                           \
+#define UCC_TL_SPIN_TASK_TEAM(_task)                                       \
     (ucc_derived_of((_task)->super.team, ucc_tl_spin_team_t))
 
 #define UCC_TL_SPIN_CHK_PTR(lib, func, ptr, status, err_code, err_handler) \
     {                                                                      \
         ptr = (func);                                                      \
         if (!ptr) {                                                        \
-            tl_error(lib, "%s failed", #func);                             \
+            tl_error(lib, "%s failed with errno %d", #func, errno);        \
             status = (err_code);                                           \
             goto err_handler;                                              \
         } else {                                                           \

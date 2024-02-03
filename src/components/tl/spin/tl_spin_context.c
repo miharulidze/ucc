@@ -12,19 +12,21 @@ int mtu_lookup[UCC_TL_SPIN_MCAST_MAX_MTU_COUNT][2] = {
 
 static ucc_status_t ucc_tl_spin_init_p2p_context(ucc_tl_spin_context_t *ctx)
 {
-    ucc_status_t               status      = UCC_OK;
-    ucc_base_lib_t            *lib         = ctx->super.super.lib;
-    ucc_tl_spin_p2p_context_t *p2p_ctx     = &ctx->p2p;
-    struct ibv_device        **device_list = NULL;
-    struct ibv_device         *dev         = NULL;
-    char                      *devname     = NULL;
-    char                      *ib          = NULL;
-    char                      *ib_name     = NULL;
-    char                      *port        = NULL;
+    ucc_status_t               status          = UCC_OK;
+    ucc_base_lib_t            *lib             = ctx->super.super.lib;
+    ucc_tl_spin_p2p_context_t *p2p_ctx         = &ctx->p2p;
+    struct ibv_device        **device_list     = NULL;
+    struct ibv_device         *dev             = NULL;
+    char                      *devname         = NULL;
+    char                      *ib              = NULL;
+    char                      *ib_name         = NULL;
+    char                      *port            = NULL;
+    //struct ibv_gid_entry      *gid_tbl_entries = NULL;
     struct ibv_port_attr       port_attr;
-    int                        num_devices;
+    int                        num_devices;//, num_gid_tbl_entries;
     int                        i;
     int                        ib_valid;
+    //int                        gid_found;
 
     device_list = ibv_get_device_list(&num_devices);
     if (!device_list || !num_devices) {
@@ -68,6 +70,7 @@ static ucc_status_t ucc_tl_spin_init_p2p_context(ucc_tl_spin_context_t *ctx)
 
     UCC_TL_SPIN_CHK_PTR(lib, ibv_open_device(dev), p2p_ctx->dev, 
                         status, UCC_ERR_NO_RESOURCE, free_dev_list);
+
     UCC_TL_SPIN_CHK_ERR(lib, ibv_query_port(p2p_ctx->dev, 
                                             ctx->ib_port,
                                             &port_attr),
@@ -78,11 +81,37 @@ static ucc_status_t ucc_tl_spin_init_p2p_context(ucc_tl_spin_context_t *ctx)
         status = UCC_ERR_NO_RESOURCE;
         goto close_dev;
     }
-    UCC_TL_SPIN_CHK_PTR(lib, ibv_alloc_pd(p2p_ctx->dev), p2p_ctx->pd, 
-                        status, UCC_ERR_NO_RESOURCE, close_dev);
+
+    //UCC_TL_SPIN_CHK_PTR(lib,
+    //                    ucc_calloc(UCC_TL_SPIN_GID_TBL_MAX_ENTRIES, sizeof(struct ibv_gid_entry)),
+    //                    gid_tbl_entries,
+    //                    status, UCC_ERR_NO_MEMORY, close_dev);
+    //num_gid_tbl_entries = ibv_query_gid_table(p2p_ctx->dev, gid_tbl_entries, 
+    //                                          UCC_TL_SPIN_GID_TBL_MAX_ENTRIES, 0);
+    //for (i = 0; i < num_gid_tbl_entries && !gid_found; i++) {
+    //    if (gid_tbl_entries[i].gid_type == IBV_GID_TYPE_IB) {
+ 	//		p2p_ctx->dev_addr.gid_table_index = gid_tbl_entries[i].gid_index;
+	//		p2p_ctx->dev_addr.gid             = gid_tbl_entries[i].gid;
+    //        gid_found                         = 1;
+    //    }
+    //}
+    //if (!gid_found) {
+    //    status = UCC_ERR_NO_RESOURCE;
+    //    goto free_gid_tbl;
+    //}
+
+    p2p_ctx->dev_addr.port_num = ctx->ib_port;
+    p2p_ctx->dev_addr.mtu      = port_attr.active_mtu;
+    p2p_ctx->dev_addr.lid      = port_attr.lid;
+
+    UCC_TL_SPIN_CHK_PTR(lib,
+                        ibv_alloc_pd(p2p_ctx->dev), p2p_ctx->pd, 
+                        status, UCC_ERR_NO_RESOURCE, free_gid_tbl);
 
     tl_debug(lib, "p2p context setup complete: ctx %p", p2p_ctx);
 
+free_gid_tbl:
+//    ucc_free(gid_tbl_entries);
 close_dev:
     if (status != UCC_OK) {
         ibv_close_device(p2p_ctx->dev);
@@ -174,8 +203,8 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
         goto error;
     }
 
-    mcast_ctx->ctx = mcast_ctx->id->verbs;
-    mcast_ctx->pd  = ibv_alloc_pd(mcast_ctx->ctx);
+    mcast_ctx->dev = mcast_ctx->id->verbs;
+    mcast_ctx->pd  = ibv_alloc_pd(mcast_ctx->dev);
     if (!mcast_ctx->pd) {
         tl_error(lib, "failed to allocate pd");
         status = UCC_ERR_NO_RESOURCE;
@@ -183,7 +212,7 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
     }
 
     /* Determine MTU */
-    if (ibv_query_port(mcast_ctx->ctx, ctx->ib_port, &port_attr)) {
+    if (ibv_query_port(mcast_ctx->dev, ctx->ib_port, &port_attr)) {
         tl_error(lib, "couldn't query port in ctx create, errno %d", errno);
         status = UCC_ERR_NO_RESOURCE;
         goto error;
@@ -208,15 +237,17 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
                  active_mtu, max_mtu);
     }
 
-    if (ibv_query_device(mcast_ctx->ctx, &device_attr)) {
+    if (ibv_query_device(mcast_ctx->dev, &device_attr)) {
         tl_error(lib, "failed to query device in ctx create, errno %d", errno);
         status = UCC_ERR_NO_RESOURCE;
         goto error;
     }
 
-    tl_debug(lib, "MTU %d, MAX QP WR: %d, max srq_wr: %d, max cq: %d, max cqe: %d",
+    tl_debug(lib, "MTU %d, MAX QP WR: %d, max srq_wr: %d, max cq: %d, max cqe: %d, "
+                  "max mcast grp: %d, max mcast qp attach: %d, max total mcast qp attach: %d",
              mcast_ctx->mtu, device_attr.max_qp_wr, device_attr.max_srq_wr,
-             device_attr.max_cq, device_attr.max_cqe);
+             device_attr.max_cq, device_attr.max_cqe,
+             device_attr.max_mcast_grp, device_attr.max_mcast_qp_attach, device_attr.max_total_mcast_qp_attach);
 
     mcast_ctx->max_qp_wr = device_attr.max_qp_wr;
     status = ucc_mpool_init(&mcast_ctx->compl_objects_mp, 0, sizeof(ucc_tl_mlx5_mcast_p2p_completion_obj_t), 0,
