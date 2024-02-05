@@ -47,11 +47,11 @@ UCC_CLASS_DECLARE(ucc_tl_spin_lib_t, const ucc_base_lib_params_t *,
 #define UCC_TL_SPIN_DEFAULT_PKEY 0 
 #define UCC_TL_SPIN_GID_TBL_MAX_ENTRIES 32
 typedef struct ucc_tl_spin_ib_dev_addr {
-    int           port_num;
-    enum ibv_mtu  mtu;
-    uint16_t      lid;
-    //uint8_t       gid_table_index;
-	//union ibv_gid gid;
+    int                 port_num;
+    enum ibv_mtu        mtu;
+    uint16_t            lid;
+    uint8_t             gid_table_index;
+	union ibv_gid       gid;
 } ucc_tl_spin_ib_dev_addr_t;
 
 typedef struct ucc_tl_spin_qp_addr {
@@ -92,14 +92,6 @@ UCC_CLASS_DECLARE(ucc_tl_spin_context_t, const ucc_base_context_params_t *,
 
 typedef enum
 {
-    UCC_TL_SPIN_TEAM_STATE_INIT,
-    UCC_TL_SPIN_TEAM_STATE_POSTED,
-    UCC_TL_SPIN_TEAM_INITIALIZING_WORKERS,
-    UCC_TL_SPIN_TEAM_READY,
-} ucc_tl_spin_team_state_t;
-
-typedef enum
-{
     UCC_TL_SPIN_WORKER_TYPE_CTRL,
     UCC_TL_SPIN_WORKER_TYPE_TX,
     UCC_TL_SPIN_WORKER_TYPE_RX
@@ -110,23 +102,28 @@ typedef struct ucc_tl_spin_worker_info {
     pthread_t                 pthread;
     struct ibv_cq            *cq;
     struct ibv_qp           **qps;
-    struct rdma_cm_event    **mcast_events;
+    struct ibv_ah           **ahs;
     uint32_t                  n_mcgs;
     /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
+
+typedef struct ucc_tl_spin_mcast_join_info {
+    ucc_status_t              status;
+    struct sockaddr_in6       saddr;
+    ucc_tl_spin_ib_dev_addr_t mcsg_addr;
+} ucc_tl_spin_mcast_join_info_t;
 
 #define UCC_TL_SPIN_MAX_MCGS    1
 #define UCC_TL_SPIN_P2P_QPS_NUM 2 // 2 QPs to have ring (TODO: check service collectives)
 #define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_MCGS))
 typedef struct ucc_tl_spin_team {
-    ucc_tl_team_t              super;
-    ucc_tl_spin_team_state_t   state;
-    ucc_tl_spin_worker_info_t *workers;
-    ucc_tl_spin_worker_info_t *ctrl_ctx;
-    ucc_team_t                *base_team;
-    ucc_subset_t               subset;
-    ucc_rank_t                 rank;
-    ucc_rank_t                 size;
+    ucc_tl_team_t                  super;
+    ucc_tl_spin_mcast_join_info_t *mcgs_infos;
+    ucc_tl_spin_worker_info_t     *workers;
+    ucc_tl_spin_worker_info_t     *ctrl_ctx;
+    ucc_team_t                    *base_team;
+    ucc_subset_t                   subset;
+    ucc_rank_t                     size;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
@@ -137,6 +134,9 @@ typedef struct ucc_tl_spin_task {
 } ucc_tl_spin_task_t;
 
 #define UCC_TL_SPIN_SUPPORTED_COLLS (UCC_COLL_TYPE_BCAST)
+
+#define UCC_TL_SPIN_CTX_LIB(_ctx)                                          \
+    (ctx->super.super.lib)
 
 #define UCC_TL_SPIN_TEAM_LIB(_team)                                        \
     (ucc_derived_of((_team)->super.super.context->lib, ucc_tl_spin_lib_t))
