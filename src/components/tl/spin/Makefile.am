@@ -22,6 +22,10 @@ sources =             \
 	tl_spin_team.c    \
 	tl_spin_coll.h    \
 	tl_spin_coll.c    \
+	tl_spin_p2p.h     \
+	tl_spin_p2p.c     \
+	tl_spin_mcast.h   \
+	tl_spin_mcast.c   \
 	$(mcast)
 
 module_LTLIBRARIES = libucc_tl_spin.la

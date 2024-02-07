@@ -44,7 +44,7 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
     {"MCAST_CQ_DEPTH", "128", "Multicast CQ depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, mcast_cq_depth),
      UCC_CONFIG_TYPE_INT},
-     
+
     {"MCAST_QP_DEPTH", "128", "Multicast QP depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, mcast_qp_depth),
      UCC_CONFIG_TYPE_INT},
@@ -56,8 +56,7 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
     {"P2P_QP_DEPTH", "128", "P2P QP depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, p2p_qp_depth),
      UCC_CONFIG_TYPE_INT},
-
-
+    
     {NULL}};
 
 UCC_CLASS_DEFINE_NEW_FUNC(ucc_tl_spin_context_t, ucc_base_context_t,

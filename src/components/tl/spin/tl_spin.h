@@ -97,20 +97,37 @@ typedef enum
     UCC_TL_SPIN_WORKER_TYPE_RX
 } ucc_tl_spin_worker_type_t;
 
+typedef enum
+{
+    UCC_TL_SPIN_WORKER_INIT = 0,
+    UCC_TL_SPIN_WORKER_START = 1,
+    UCC_TL_SPIN_WORKER_IGNORE_TX = 2
+} ucc_tl_spin_worker_signal_t;
+
 typedef struct ucc_tl_spin_worker_info {
+    ucc_tl_spin_context_t    *ctx;
     ucc_tl_spin_worker_type_t type;
+    ucc_tl_spin_worker_signal_t *signal;
     pthread_t                 pthread;
     struct ibv_cq            *cq;
     struct ibv_qp           **qps;
     struct ibv_ah           **ahs;
+    struct ibv_mr           **staging_rbuf_mr;
+    char                    **staging_rbuf;
+    uint32_t                  staging_rbuf_len;
     uint32_t                  n_mcgs;
+    pthread_mutex_t          *signal_mutex;
     /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
+
+#define UCC_TL_SPIN_JOIN_MAGICNUM 0xDEADBEAF
 
 typedef struct ucc_tl_spin_mcast_join_info {
     ucc_status_t              status;
     struct sockaddr_in6       saddr;
     ucc_tl_spin_ib_dev_addr_t mcsg_addr;
+    ucc_tl_spin_ib_dev_addr_t mcsg_addr_dst;
+    unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
 #define UCC_TL_SPIN_MAX_MCGS    1
@@ -124,6 +141,8 @@ typedef struct ucc_tl_spin_team {
     ucc_team_t                    *base_team;
     ucc_subset_t                   subset;
     ucc_rank_t                     size;
+    ucc_tl_spin_worker_signal_t    workers_signal;
+    pthread_mutex_t                signal_mutex;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
