@@ -7,7 +7,7 @@ ucc_tl_spin_team_fini_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs
     char            buf[40];
     const char     *dst;
 
-    dst = inet_ntop(AF_INET6, mcgs_addr, buf, 40);
+    dst = inet_ntop(AF_INET6, &mcgs_addr->sin6_addr, buf, 40);
     if (NULL == dst) {
         tl_error(lib, "inet_ntop failed");
         return UCC_ERR_NO_RESOURCE;
@@ -112,10 +112,11 @@ ucc_tl_spin_team_join_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs
         ucc_assert(cm_event);
         info->mcsg_addr.gid = cm_event->param.ud.ah_attr.grh.dgid;
         info->mcsg_addr.lid = cm_event->param.ud.ah_attr.dlid;
+
     }
 
     if (info->status == UCC_OK) {
-        usleep(10000);
+        usleep(100000);
     }
 
     if (cm_event) {
@@ -195,7 +196,7 @@ static ucc_status_t ucc_tl_spin_mcast_connect_qp(ucc_tl_spin_context_t *ctx,
         return UCC_ERR_NO_RESOURCE;
     }
 
-    if (ibv_attach_mcast(worker->qps[qp_id], 
+    if (ibv_attach_mcast(worker->qps[qp_id],
                          &mcgs_info->mcsg_addr.gid,
                          mcgs_info->mcsg_addr.lid)) {
         tl_error(lib, "failed to attach QP to the mcast group, errno %d", errno);
@@ -230,7 +231,7 @@ ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
 {
     ucc_base_lib_t         *lib          = UCC_TL_SPIN_CTX_LIB(ctx);
     struct ibv_qp_init_attr qp_init_attr = {0};
-
+    
     qp_init_attr.qp_type             = IBV_QPT_UD;
     qp_init_attr.send_cq             = worker->cq;
     qp_init_attr.recv_cq             = worker->cq;

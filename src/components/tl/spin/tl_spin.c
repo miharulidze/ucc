@@ -52,7 +52,7 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
     {"P2P_CQ_DEPTH", "128", "P2P CQ depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, p2p_cq_depth),
      UCC_CONFIG_TYPE_INT},
-     
+
     {"P2P_QP_DEPTH", "128", "P2P QP depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, p2p_qp_depth),
      UCC_CONFIG_TYPE_INT},

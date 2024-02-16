@@ -76,6 +76,7 @@ typedef struct ucc_tl_spin_mcast_context {
     struct rdma_cm_id         *id;
     struct rdma_event_channel *channel;
     ucc_mpool_t                compl_objects_mp;
+    unsigned int               gid;
 } ucc_tl_spin_mcast_context_t;
 
 typedef struct ucc_tl_spin_context {
@@ -99,24 +100,26 @@ typedef enum
 
 typedef enum
 {
-    UCC_TL_SPIN_WORKER_INIT = 0,
+    UCC_TL_SPIN_WORKER_POLL  = 0,
     UCC_TL_SPIN_WORKER_START = 1,
-    UCC_TL_SPIN_WORKER_IGNORE_TX = 2
+    UCC_TL_SPIN_WORKER_FIN   = 2
 } ucc_tl_spin_worker_signal_t;
 
 typedef struct ucc_tl_spin_worker_info {
-    ucc_tl_spin_context_t    *ctx;
-    ucc_tl_spin_worker_type_t type;
+    ucc_tl_spin_context_t       *ctx;
+    ucc_tl_spin_worker_type_t    type;
+    pthread_t                    pthread;
+    struct ibv_cq               *cq;
+    struct ibv_qp              **qps;
+    struct ibv_ah              **ahs;
+    struct ibv_mr              **staging_rbuf_mr;
+    char                       **staging_rbuf;
+    uint32_t                     staging_rbuf_len;
+    uint32_t                     n_mcgs;
     ucc_tl_spin_worker_signal_t *signal;
-    pthread_t                 pthread;
-    struct ibv_cq            *cq;
-    struct ibv_qp           **qps;
-    struct ibv_ah           **ahs;
-    struct ibv_mr           **staging_rbuf_mr;
-    char                    **staging_rbuf;
-    uint32_t                  staging_rbuf_len;
-    uint32_t                  n_mcgs;
-    pthread_mutex_t          *signal_mutex;
+    pthread_mutex_t             *signal_mutex;
+    int                         *compls;
+    pthread_mutex_t             *compls_mutex;
     /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
 
@@ -135,14 +138,20 @@ typedef struct ucc_tl_spin_mcast_join_info {
 #define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_MCGS))
 typedef struct ucc_tl_spin_team {
     ucc_tl_team_t                  super;
-    ucc_tl_spin_mcast_join_info_t *mcgs_infos;
-    ucc_tl_spin_worker_info_t     *workers;
-    ucc_tl_spin_worker_info_t     *ctrl_ctx;
     ucc_team_t                    *base_team;
     ucc_subset_t                   subset;
     ucc_rank_t                     size;
-    ucc_tl_spin_worker_signal_t    workers_signal;
-    pthread_mutex_t                signal_mutex;
+    ucc_tl_spin_mcast_join_info_t *mcgs_infos;
+    ucc_tl_spin_worker_info_t     *ctrl_ctx;
+    ucc_tl_spin_worker_info_t     *workers;
+    ucc_tl_spin_worker_signal_t    tx_signal;
+    ucc_tl_spin_worker_signal_t    rx_signal;
+    pthread_mutex_t                tx_signal_mutex;
+    pthread_mutex_t                rx_signal_mutex;
+    int                            tx_compls;
+    int                            rx_compls;
+    pthread_mutex_t                tx_compls_mutex;
+    pthread_mutex_t                rx_compls_mutex;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);

@@ -56,11 +56,12 @@ err:
 
 ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
 {
-    ucc_tl_spin_task_t *task            = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
-    ucc_tl_spin_team_t *team            = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_task_t        *task     = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_team_t        *team     = UCC_TL_SPIN_TASK_TEAM(task);
     ucc_tl_spin_worker_info_t *ctrl_ctx = team->ctrl_ctx;
+    ucc_rank_t                 root     = task->super.bargs.args.root;
+    int                        comps    = 0;
     struct ibv_wc              wc[1];
-    int comps = 0;
 
     ucc_debug("barrier 1: rank %d", team->subset.myrank);
     // ring pass 1
@@ -105,6 +106,17 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         ucc_debug("barrier pass 2: rank %d, send OK", team->subset.myrank);
     }
 
+    // start workers
+    if (team->subset.myrank == root) {
+        pthread_mutex_lock(&team->tx_signal_mutex);
+        team->tx_signal = UCC_TL_SPIN_WORKER_START;
+        pthread_mutex_unlock(&team->tx_signal_mutex);
+    } else {
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+        team->rx_signal = UCC_TL_SPIN_WORKER_START;
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+    }
+
     coll_task->status = UCC_INPROGRESS;
     tl_debug(UCC_TASK_LIB(task), "start coll task ptr=%p tgid=%u",
              task, task->dummy_task_id);
@@ -113,31 +125,54 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
 
 void ucc_tl_spin_bcast_progress(ucc_coll_task_t *coll_task)
 {
-    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
-    ucc_tl_spin_team_t *team = UCC_TL_SPIN_TASK_TEAM(task);
-    //ucc_rank_t          root = task->super.bargs.args.root;
+    ucc_tl_spin_task_t    *task          = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_team_t    *team          = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_context_t *ctx           = UCC_TL_SPIN_TEAM_CTX(team);
+    int                    is_root       = team->subset.myrank == task->super.bargs.args.root ? 1 : 0;
+    int                    total_workers = is_root ? ctx->cfg.n_tx_workers : ctx->cfg.n_rx_workers;
+    int                    workers_completed;
 
-    pthread_mutex_lock(&team->signal_mutex);
-    if (team->subset.myrank == 0) {
-        ucc_debug("signaling to tx worker");
-        team->workers_signal = UCC_TL_SPIN_WORKER_START;
+    if (is_root) {
+        pthread_mutex_lock(&team->tx_compls_mutex);
+        workers_completed = team->tx_compls;
+        pthread_mutex_unlock(&team->tx_compls_mutex);
     } else {
-        team->workers_signal = UCC_TL_SPIN_WORKER_IGNORE_TX;
-    }
-    pthread_mutex_unlock(&team->signal_mutex);
-
-    while (1) {
-        // TODO
+        pthread_mutex_lock(&team->rx_compls_mutex);
+        workers_completed = team->rx_compls;
+        pthread_mutex_unlock(&team->rx_compls_mutex);
     }
 
-    coll_task->status = UCC_OK;
-    tl_debug(UCC_TASK_LIB(task), "progress coll task ptr=%p tgid=%u",
-             task, task->dummy_task_id);
+    if (workers_completed == total_workers) {
+        coll_task->status = UCC_OK;
+    } else {
+        coll_task->status = UCC_INPROGRESS;
+    }
+
+    //tl_debug(UCC_TASK_LIB(task), "progress coll task ptr=%p tgid=%u", task, task->dummy_task_id);
 }
 
 ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
 {
-    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_task_t    *task    = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_team_t    *team    = UCC_TL_SPIN_TASK_TEAM(task);
+    int                    is_root = team->subset.myrank == task->super.bargs.args.root ? 1 : 0;
+
+    if (is_root) {
+        pthread_mutex_lock(&team->tx_signal_mutex);
+        team->tx_signal = UCC_TL_SPIN_WORKER_POLL;
+        pthread_mutex_unlock(&team->tx_signal_mutex);
+        pthread_mutex_lock(&team->tx_compls_mutex);
+        team->tx_compls = 0;
+        pthread_mutex_unlock(&team->tx_compls_mutex);
+    } else {
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+        team->rx_signal = UCC_TL_SPIN_WORKER_POLL;
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+        pthread_mutex_lock(&team->rx_compls_mutex);
+        team->rx_compls = 0;
+        pthread_mutex_unlock(&team->rx_compls_mutex);
+    }
+
     tl_debug(UCC_TASK_LIB(task), "finalize coll task ptr=%p tgid=%u",
              task, task->dummy_task_id);
     ucc_mpool_put(task);
@@ -152,63 +187,105 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t *task)
     return UCC_OK;
 }
 
-void *ucc_tl_spin_coll_worker_tx(void *arg)
+inline ucc_status_t 
+ucc_tl_spin_coll_worker_tx_start(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_tl_spin_worker_info_t *ctx = (ucc_tl_spin_worker_info_t *)arg;
-    char *buf = ucc_calloc(1, 2048);
+    char *buf             = ucc_calloc(1, 2048);
     struct ibv_mr *buf_mr = ibv_reg_mr(ctx->ctx->mcast.pd, buf, 2048, IBV_ACCESS_REMOTE_WRITE |
                                                                       IBV_ACCESS_LOCAL_WRITE  |
                                                                       IBV_ACCESS_REMOTE_READ);
+    int ncomps            = 0;
     struct ibv_wc wc[1];
-    int ncomps = 0;
-    int signal;
 
-    ucc_debug("tx thread started\n");
-
+    ucc_debug("tx thread got root start signal\n");
     ucc_assert_always(buf && buf_mr);
     ucc_assert_always(ctx->signal != NULL);
 
-poll:
-    pthread_mutex_lock(ctx->signal_mutex);
-    signal = *(ctx->signal);
-    pthread_mutex_unlock(ctx->signal_mutex);
-
-    switch (signal) {
-    case (UCC_TL_SPIN_WORKER_INIT):
-        goto poll;
-        break;
-    case (UCC_TL_SPIN_WORKER_START):
-        ucc_debug("tx thread got root start signal\n");
-        ib_qp_ud_post_mcast_send(ctx->qps[0], ctx->ahs[0], buf_mr, buf, 2048, 0);
-        ncomps = ib_cq_poll(ctx->cq, 1, wc);
-        ucc_assert_always(ncomps == 1);
-        ucc_debug("tx thread sent multicast\n");
-        break;
-    case (UCC_TL_SPIN_WORKER_IGNORE_TX):
-        break;
-    default:
-        printf("tx thread shouldn't be here\n");
-        break;
-    }
+    ib_qp_ud_post_mcast_send(ctx->qps[0], ctx->ahs[0], buf_mr, buf, 2048, 0);
+    ncomps = ib_cq_poll(ctx->cq, 1, wc);
+    ucc_assert_always(ncomps == 1);
+    ucc_debug("tx thread sent multicast\n");
 
     ibv_dereg_mr(buf_mr);
     ucc_free(buf);
-    ucc_debug("tx thread exits\n");
 
-    return arg;
+    return UCC_OK;
 }
 
-void * ucc_tl_spin_coll_worker_rx(void *arg)
+inline ucc_status_t
+ucc_tl_spin_coll_worker_rx_start(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_tl_spin_worker_info_t *ctx = (ucc_tl_spin_worker_info_t *)arg;
     struct ibv_wc wc[1];
-    int ncomps;
+    int           ncomps;
 
     ucc_debug("rx thread started\n");
     ncomps = ib_cq_poll(ctx->cq, 1, wc);
     ucc_assert_always(ncomps == 1);
     ucc_debug("rx thread got the multicasted buffer\n");
     ucc_debug("rx thread exits\n");
+
+    return UCC_OK;
+}
+
+void *ucc_tl_spin_coll_worker_main(void *arg)
+{
+    ucc_tl_spin_worker_info_t *ctx       = (ucc_tl_spin_worker_info_t *)arg;
+    int                        completed = 0;
+    ucc_status_t               status;
+    int                        signal;
+
+    ucc_debug("worker thread started\n");
+
+poll:
+    pthread_mutex_lock(ctx->signal_mutex);
+    signal = *(ctx->signal);
+    pthread_mutex_unlock(ctx->signal_mutex);
+    
+    switch (signal) {
+
+    case (UCC_TL_SPIN_WORKER_POLL):
+        completed = 0;
+        goto poll;
+        break;
+
+    case (UCC_TL_SPIN_WORKER_START):
+        if (completed) {
+            goto poll;
+        }
+
+        switch (ctx->type) {
+
+        case (UCC_TL_SPIN_WORKER_TYPE_TX):
+            status = ucc_tl_spin_coll_worker_tx_start(ctx);
+            break;
+
+        case (UCC_TL_SPIN_WORKER_TYPE_RX):
+            status = ucc_tl_spin_coll_worker_rx_start(ctx);
+            break;
+
+        default:
+            ucc_debug("worker thread shouldn't be here");
+            ucc_assert_always(0);
+        }
+
+        ucc_assert_always(status == UCC_OK);
+
+        completed = 1;
+        pthread_mutex_lock(ctx->compls_mutex);
+        (*(ctx->compls))++;
+        pthread_mutex_unlock(ctx->compls_mutex);
+        break;
+
+    case (UCC_TL_SPIN_WORKER_FIN):
+        break;
+
+    default:
+        ucc_debug("worker thread shouldn't be here\n");
+        ucc_assert_always(0);
+        break;
+    }
+
+    ucc_debug("worker thread exits\n");
 
     return arg;
 }

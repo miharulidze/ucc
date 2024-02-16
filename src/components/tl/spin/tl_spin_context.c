@@ -270,6 +270,8 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
     }
     */
 
+   mcast_ctx->gid = 0;
+
     tl_debug(lib, "multicast context setup complete: ctx %p", mcast_ctx);
 
     return UCC_OK;

@@ -6,7 +6,5 @@
 ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
                                    ucc_base_team_t *team,
                                    ucc_coll_task_t **task);
-void * ucc_tl_spin_coll_worker_tx(void *arg);
-void * ucc_tl_spin_coll_worker_rx(void *arg);
-
+void * ucc_tl_spin_coll_worker_main(void *arg);
 #endif
