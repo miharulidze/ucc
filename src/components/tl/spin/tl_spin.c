@@ -57,6 +57,10 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      ucc_offsetof(ucc_tl_spin_context_config_t, p2p_qp_depth),
      UCC_CONFIG_TYPE_INT},
 
+    {"START_CORE_ID", "0", "Start CPU core id to pin worker threads",
+     ucc_offsetof(ucc_tl_spin_context_config_t, start_core_id),
+     UCC_CONFIG_TYPE_INT},
+
     {NULL}};
 
 UCC_CLASS_DEFINE_NEW_FUNC(ucc_tl_spin_context_t, ucc_base_context_t,

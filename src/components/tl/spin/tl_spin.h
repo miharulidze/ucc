@@ -36,6 +36,7 @@ typedef struct ucc_tl_spin_context_config {
     int                     mcast_qp_depth;
     int                     p2p_cq_depth;
     int                     p2p_qp_depth;
+    int                     start_core_id;
 } ucc_tl_spin_context_config_t;
 
 typedef struct ucc_tl_spin_lib {
