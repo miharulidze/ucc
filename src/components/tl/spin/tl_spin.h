@@ -4,6 +4,7 @@
 #include "components/tl/ucc_tl.h"
 #include "components/tl/ucc_tl_log.h"
 #include "components/tl/mlx5/mcast/tl_mlx5_mcast_helper.h"
+#include "utils/ucc_rcache.h"
 #include "utils/ucc_mpool.h"
 
 #include <infiniband/verbs.h>
@@ -79,6 +80,15 @@ typedef struct ucc_tl_spin_mcast_context {
     unsigned int               gid;
 } ucc_tl_spin_mcast_context_t;
 
+typedef struct ucc_tl_spin_reg {
+    struct ibv_mr *mr;
+} ucc_tl_spin_reg_t;
+
+typedef struct ucc_tl_spin_rcache_region {
+    ucc_rcache_region_t super;
+    ucc_tl_spin_reg_t  reg;
+} ucc_tl_spin_rcache_region_t;
+
 typedef struct ucc_tl_spin_context {
     ucc_tl_context_t             super;
     ucc_tl_spin_context_config_t cfg;
@@ -87,6 +97,7 @@ typedef struct ucc_tl_spin_context {
     int                          ib_port;
     ucc_tl_spin_p2p_context_t    p2p;
     ucc_tl_spin_mcast_context_t  mcast;
+    ucc_rcache_t                *rcache;
 } ucc_tl_spin_context_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_context_t, const ucc_base_context_params_t *,
                   const ucc_base_config_t *);

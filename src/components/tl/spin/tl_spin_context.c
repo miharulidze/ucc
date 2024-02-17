@@ -1,4 +1,5 @@
 #include "tl_spin.h"
+#include "tl_spin_rcache.h"
 #include "tl_spin_coll.h"
 
 #define UCC_TL_SPIN_MCAST_MAX_MTU_COUNT 5
@@ -261,16 +262,7 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
         goto error;
     }
 
-    /**
-    ctx->rcache = NULL;
-    status = ucc_tl_mlx5_mcast_setup_rcache(ctx);
-    if (UCC_OK != status) {
-        tl_error(lib, "failed to setup rcache");
-        goto error;
-    }
-    */
-
-   mcast_ctx->gid = 0;
+    mcast_ctx->gid = 0;
 
     tl_debug(lib, "multicast context setup complete: ctx %p", mcast_ctx);
 
@@ -317,11 +309,9 @@ void ucc_tl_spin_finalize_mcast_context(ucc_tl_spin_context_t *ctx)
     ucc_tl_spin_mcast_context_t *mcast_ctx = &ctx->mcast;
     ucc_base_lib_t              *lib       = ctx->super.super.lib;
 
-    /**
     if (ctx->rcache) {
         ucc_rcache_destroy(ctx->rcache);
     }
-    */
 
     if (mcast_ctx->pd) {
         if (ibv_dealloc_pd(mcast_ctx->pd)) {
@@ -357,6 +347,12 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
         return UCC_ERR_NO_MEMORY;
     }
 
+    status = tl_spin_rcache_create(self);
+    if (UCC_OK != status) {
+        tl_debug(self->super.super.lib, "failed to create rcache");
+        goto err_rcache;
+    }
+
     status = ucc_tl_spin_init_p2p_context(self);
     if (status != UCC_OK) {
         tl_error(self->super.super.lib, "failed to initialize p2p context");
@@ -372,6 +368,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
     tl_info(self->super.super.lib, "initialized tl context: %p", self);
     return UCC_OK;
 
+err_rcache:
 err_mcast:
     ucc_tl_spin_finalize_p2p_context(self);
 err_p2p:

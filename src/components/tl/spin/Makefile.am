@@ -26,6 +26,8 @@ sources =             \
 	tl_spin_p2p.c     \
 	tl_spin_mcast.h   \
 	tl_spin_mcast.c   \
+	tl_spin_rcache.h  \
+	tl_spin_rcache.c  \
 	$(mcast)
 
 module_LTLIBRARIES = libucc_tl_spin.la
