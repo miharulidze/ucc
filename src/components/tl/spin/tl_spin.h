@@ -28,7 +28,7 @@ typedef struct ucc_tl_spin_lib_config {
 typedef struct ucc_tl_spin_context_config {
     ucc_tl_context_config_t super;
     char                   *ib_dev_name;
-    int                     n_mcgs;
+    int                     n_mcg;
     int                     n_tx_workers;
     int                     n_rx_workers;
     int                     mcast_cq_depth;
@@ -115,7 +115,7 @@ typedef struct ucc_tl_spin_worker_info {
     struct ibv_mr              **staging_rbuf_mr;
     char                       **staging_rbuf;
     uint32_t                     staging_rbuf_len;
-    uint32_t                     n_mcgs;
+    uint32_t                     n_mcg;
     ucc_tl_spin_worker_signal_t *signal;
     pthread_mutex_t             *signal_mutex;
     int                         *compls;
@@ -128,20 +128,20 @@ typedef struct ucc_tl_spin_worker_info {
 typedef struct ucc_tl_spin_mcast_join_info {
     ucc_status_t              status;
     struct sockaddr_in6       saddr;
-    ucc_tl_spin_ib_dev_addr_t mcsg_addr;
-    ucc_tl_spin_ib_dev_addr_t mcsg_addr_dst;
+    ucc_tl_spin_ib_dev_addr_t mcg_addr;
+    ucc_tl_spin_ib_dev_addr_t mcg_addr_dst;
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
-#define UCC_TL_SPIN_MAX_MCGS    1
+#define UCC_TL_SPIN_MAX_mcg    1
 #define UCC_TL_SPIN_P2P_QPS_NUM 2 // 2 QPs to have ring (TODO: check service collectives)
-#define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_MCGS))
+#define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_mcg))
 typedef struct ucc_tl_spin_team {
     ucc_tl_team_t                  super;
     ucc_team_t                    *base_team;
     ucc_subset_t                   subset;
     ucc_rank_t                     size;
-    ucc_tl_spin_mcast_join_info_t *mcgs_infos;
+    ucc_tl_spin_mcast_join_info_t *mcg_infos;
     ucc_tl_spin_worker_info_t     *ctrl_ctx;
     ucc_tl_spin_worker_info_t     *workers;
     ucc_tl_spin_worker_signal_t    tx_signal;

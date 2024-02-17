@@ -4,7 +4,7 @@
 #include "tl_spin.h"
 
 ucc_status_t
-ucc_tl_spin_team_fini_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs_addr);
+ucc_tl_spin_team_fini_mcg(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcg_addr);
 ucc_status_t ucc_tl_spin_mcast_join_mcast_post(ucc_tl_spin_context_t *ctx,
                                                struct sockaddr_in6 *net_addr,
                                                int is_root);
@@ -13,12 +13,12 @@ ucc_status_t ucc_tl_spin_mcast_join_mcast_test(ucc_tl_spin_context_t *ctx,
                                                int is_root,
                                                int is_blocking);
 ucc_status_t
-ucc_tl_spin_team_join_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs_saddr, 
+ucc_tl_spin_team_join_mcg(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcg_saddr, 
                            ucc_tl_spin_mcast_join_info_t *info, int is_root);
 ucc_status_t
 ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
                                 ucc_tl_spin_worker_info_t *worker,
-                                ucc_tl_spin_mcast_join_info_t *mcgs_info,
+                                ucc_tl_spin_mcast_join_info_t *mcg_info,
                                 int is_tx_qp, int qp_id);
 ucc_status_t 
 ucc_tl_spin_team_prepost_mcast_qp(ucc_tl_spin_context_t *ctx,

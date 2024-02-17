@@ -30,7 +30,7 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      UCC_CONFIG_TYPE_STRING},
 
     {"MCAST_GROUPS", "1", "Number of multicast groups",
-     ucc_offsetof(ucc_tl_spin_context_config_t, n_mcgs),
+     ucc_offsetof(ucc_tl_spin_context_config_t, n_mcg),
      UCC_CONFIG_TYPE_INT},
 
     {"TX_WORKERS", "1", "Number of TX workers",

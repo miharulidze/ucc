@@ -78,10 +78,10 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
     int                        i, j;
 
     // TODO: support multiple QPs/multicast subgroups per CQ
-    ucc_assert_always(ctx->cfg.n_mcgs == ctx->cfg.n_tx_workers);
-    ucc_assert_always(ctx->cfg.n_mcgs == ctx->cfg.n_rx_workers);
-    //ucc_assert_always(ctx->cfg.n_mcgs % ctx->cfg.n_tx_workers == 0);
-    //ucc_assert_always(ctx->cfg.n_mcgs % ctx->cfg.n_rx_workers == 0);
+    ucc_assert_always(ctx->cfg.n_mcg == ctx->cfg.n_tx_workers);
+    ucc_assert_always(ctx->cfg.n_mcg == ctx->cfg.n_rx_workers);
+    //ucc_assert_always(ctx->cfg.n_mcg % ctx->cfg.n_tx_workers == 0);
+    //ucc_assert_always(ctx->cfg.n_mcg % ctx->cfg.n_rx_workers == 0);
 
     UCC_CLASS_CALL_SUPER_INIT(ucc_tl_team_t, &ctx->super, params);
 
@@ -95,8 +95,8 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                         self->workers,
                         status, UCC_ERR_NO_MEMORY, ret);
     UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                        ucc_calloc(ctx->cfg.n_mcgs, sizeof(ucc_tl_spin_mcast_join_info_t)),
-                        self->mcgs_infos,
+                        ucc_calloc(ctx->cfg.n_mcg, sizeof(ucc_tl_spin_mcast_join_info_t)),
+                        self->mcg_infos,
                         status, UCC_ERR_NO_MEMORY, ret);
 
     self->tx_signal = UCC_TL_SPIN_WORKER_POLL;
@@ -115,9 +115,9 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
         worker->type   = i < ctx->cfg.n_tx_workers ?
                          UCC_TL_SPIN_WORKER_TYPE_TX :
                          UCC_TL_SPIN_WORKER_TYPE_RX;
-        worker->n_mcgs = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
-                         ctx->cfg.n_mcgs / ctx->cfg.n_tx_workers :
-                         ctx->cfg.n_mcgs / ctx->cfg.n_rx_workers;
+        worker->n_mcg = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
+                         ctx->cfg.n_mcg / ctx->cfg.n_tx_workers :
+                         ctx->cfg.n_mcg / ctx->cfg.n_rx_workers;
         worker->signal = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
                          &(self->tx_signal) :
                          &(self->rx_signal);
@@ -131,10 +131,10 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                                &(self->tx_compls_mutex) :
                                &(self->rx_compls_mutex);
         UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                            ucc_calloc(worker->n_mcgs, sizeof(struct ibv_qp *)),
+                            ucc_calloc(worker->n_mcg, sizeof(struct ibv_qp *)),
                             worker->qps, status, UCC_ERR_NO_MEMORY, ret);
         UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                            ucc_calloc(worker->n_mcgs, sizeof(struct ibv_ah *)),
+                            ucc_calloc(worker->n_mcg, sizeof(struct ibv_ah *)),
                             worker->ahs, status, UCC_ERR_NO_MEMORY, ret);
         UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                             ibv_create_cq(ctx->mcast.dev, ctx->cfg.mcast_cq_depth, NULL, NULL, 0), 
@@ -142,13 +142,13 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
         tl_debug(tl_context->lib, "worker %d created cq %p", i, worker->cq);
         if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                ucc_calloc(worker->n_mcgs, sizeof(char *)),
+                                ucc_calloc(worker->n_mcg, sizeof(char *)),
                                 worker->staging_rbuf, status, UCC_ERR_NO_MEMORY, ret);
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                ucc_calloc(worker->n_mcgs, sizeof(struct ibv_mr *)),
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_mr *)),
                                 worker->staging_rbuf_mr, status, UCC_ERR_NO_MEMORY, ret);
             worker->staging_rbuf_len = ctx->mcast.mtu * ctx->cfg.mcast_qp_depth;
-            for (j = 0; j < worker->n_mcgs; j++) {
+            for (j = 0; j < worker->n_mcg; j++) {
                 if (posix_memalign((void **)&worker->staging_rbuf[j], 64, worker->staging_rbuf_len)) {
                     tl_error(tl_context->lib, "allocation of staging buffer failed");
                     return UCC_ERR_NO_MEMORY;
@@ -188,7 +188,7 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
     ucc_tl_spin_context_t     *ctx       = UCC_TL_SPIN_TEAM_CTX(self);
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
     ucc_tl_spin_worker_info_t *worker;
-    int i, j, mcgs_id = 0;
+    int i, j, mcg_id = 0;
     
     if (self->ctrl_ctx->qps) {
         if (ibv_destroy_qp(self->ctrl_ctx->qps[0])) {
@@ -220,9 +220,9 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
             tl_error(lib, "worker %d thread joined with error", i);
         }
         if (worker->qps) {
-            for (j = 0; j < worker->n_mcgs; j++) {
-                if (ibv_detach_mcast(worker->qps[j], &self->mcgs_infos[mcgs_id].mcsg_addr.gid, self->mcgs_infos[mcgs_id].mcsg_addr.lid)) {
-                    tl_error(lib, "worker %d failed to detach qp[%d] from mcgs[%d], errno: %d", i, j, mcgs_id, errno);
+            for (j = 0; j < worker->n_mcg; j++) {
+                if (ibv_detach_mcast(worker->qps[j], &self->mcg_infos[mcg_id].mcg_addr.gid, self->mcg_infos[mcg_id].mcg_addr.lid)) {
+                    tl_error(lib, "worker %d failed to detach qp[%d] from mcg[%d], errno: %d", i, j, mcg_id, errno);
                 }
                 tl_debug(lib, "worker %d destroys qp %d %p", i, j, worker->qps[j]);
                 if (ibv_destroy_qp(worker->qps[j])) {
@@ -244,7 +244,7 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
                 ucc_free(worker->staging_rbuf);
                 ucc_free(worker->staging_rbuf_mr);
             }
-            mcgs_id = (mcgs_id + 1) % ctx->cfg.n_mcgs;
+            mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }
         if (worker->cq) {
             tl_debug(lib, "worker %d destroys cq %p", i, worker->cq);
@@ -261,10 +261,10 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
 
     ucc_free(self->workers);
 
-    for (i = 0; i < ctx->cfg.n_mcgs; i++) {
-        ucc_tl_spin_team_fini_mcgs(ctx, &self->mcgs_infos[i].saddr);
+    for (i = 0; i < ctx->cfg.n_mcg; i++) {
+        ucc_tl_spin_team_fini_mcg(ctx, &self->mcg_infos[i].saddr);
     }
-    ucc_free(self->mcgs_infos);
+    ucc_free(self->mcg_infos);
 
     tl_info(self->super.super.context->lib, "finalizing tl team: %p", self);
 }
@@ -350,57 +350,57 @@ ret:
     return status;
 }
 
-static ucc_status_t ucc_tl_spin_team_prepare_mcgs(ucc_base_team_t *tl_team,
-                                                  ucc_tl_spin_mcast_join_info_t *worker_mcgs_info,
-                                                  unsigned int mcgs_gid)
+static ucc_status_t ucc_tl_spin_team_prepare_mcg(ucc_base_team_t *tl_team,
+                                                  ucc_tl_spin_mcast_join_info_t *worker_mcg_info,
+                                                  unsigned int mcg_gid)
 {
     ucc_tl_spin_team_t            *team       = ucc_derived_of(tl_team, ucc_tl_spin_team_t);
     ucc_tl_spin_context_t         *ctx        = UCC_TL_SPIN_TEAM_CTX(team);
     ucc_base_lib_t                *lib        = UCC_TL_SPIN_CTX_LIB(ctx);
     ucc_status_t                   status     = UCC_OK;
-    struct sockaddr_in6            mcgs_saddr = {.sin6_family = AF_INET6};
+    struct sockaddr_in6            mcg_saddr = {.sin6_family = AF_INET6};
     char                           saddr_str[40];
-    ucc_tl_spin_mcast_join_info_t  mcgs_info;
+    ucc_tl_spin_mcast_join_info_t  mcg_info;
     ucc_service_coll_req_t        *bcast_req;
 
-    memset(&mcgs_info, 0, sizeof(mcgs_info));
+    memset(&mcg_info, 0, sizeof(mcg_info));
 
     if (team->subset.myrank == 0) {                 // root obtains group gid/lid
-        ucc_assert_always(mcgs_gid < 65536);        // number of mcgs'es that can be encoded in the last on ipv6 four-tet
-        ucc_assert_always(snprintf(saddr_str, 40, "0:0:0::0:0:%x", mcgs_gid) > 0);
-        ucc_assert_always(inet_pton(AF_INET6, saddr_str, &(mcgs_saddr.sin6_addr)));
-        //mcgs_saddr.sin6_flowinfo = subgroup_id++; // TODO: enumerate multicast subgroup in IP address
-        status = ucc_tl_spin_team_join_mcgs(ctx, &mcgs_saddr, &mcgs_info, 1);
+        ucc_assert_always(mcg_gid < 65536);        // number of mcg'es that can be encoded in the last on ipv6 four-tet
+        ucc_assert_always(snprintf(saddr_str, 40, "0:0:0::0:0:%x", mcg_gid) > 0);
+        ucc_assert_always(inet_pton(AF_INET6, saddr_str, &(mcg_saddr.sin6_addr)));
+        //mcg_saddr.sin6_flowinfo = subgroup_id++; // TODO: enumerate multicast subgroup in IP address
+        status = ucc_tl_spin_team_join_mcg(ctx, &mcg_saddr, &mcg_info, 1);
         (void)status;                               // send status to non-root ranks first and then fail
-        mcgs_info.magic_num = UCC_TL_SPIN_JOIN_MAGICNUM;
+        mcg_info.magic_num = UCC_TL_SPIN_JOIN_MAGICNUM;
     }
 
     status = ucc_tl_spin_team_service_bcast_post(team,
-                                                 &mcgs_info,
+                                                 &mcg_info,
                                                  sizeof(ucc_tl_spin_mcast_join_info_t), 
                                                  0,
                                                  &bcast_req);
     ucc_assert_always(status == UCC_OK);
     status = ucc_tl_spin_team_service_coll_test(bcast_req, 1); // TODO: make non-blocking
     ucc_assert_always(status == UCC_OK);
-    if (mcgs_info.status != UCC_OK) {
+    if (mcg_info.status != UCC_OK) {
         return UCC_ERR_NO_RESOURCE;
     } else {
-        ucc_assert_always(mcgs_info.magic_num == UCC_TL_SPIN_JOIN_MAGICNUM);
+        ucc_assert_always(mcg_info.magic_num == UCC_TL_SPIN_JOIN_MAGICNUM);
     }
 
-    memcpy(&mcgs_saddr.sin6_addr, mcgs_info.mcsg_addr.gid.raw, sizeof(mcgs_info.mcsg_addr.gid.raw));
-    status = ucc_tl_spin_team_join_mcgs(ctx, &mcgs_saddr, &mcgs_info, 0);
+    memcpy(&mcg_saddr.sin6_addr, mcg_info.mcg_addr.gid.raw, sizeof(mcg_info.mcg_addr.gid.raw));
+    status = ucc_tl_spin_team_join_mcg(ctx, &mcg_saddr, &mcg_info, 0);
 
-    if (mcgs_info.status != UCC_OK) {
+    if (mcg_info.status != UCC_OK) {
         return UCC_ERR_NO_RESOURCE;
     }
 
-    mcgs_info.saddr   = mcgs_saddr;
-    *worker_mcgs_info = mcgs_info;
+    mcg_info.saddr   = mcg_saddr;
+    *worker_mcg_info = mcg_info;
 
     tl_debug(lib, "team: %p, rank: %d joined multicast group: %d",
-             tl_team, team->subset.myrank, mcgs_gid);
+             tl_team, team->subset.myrank, mcg_gid);
 
     return UCC_OK;
 }
@@ -413,23 +413,23 @@ static ucc_status_t ucc_tl_spin_team_init_mcast_qps(ucc_base_team_t *tl_team)
     ucc_tl_spin_worker_info_t *worker    = NULL;
     ucc_status_t               status    = UCC_OK;
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
-    int                        i, j, mcgs_id = 0;
+    int                        i, j, mcg_id = 0;
 
     for (i = 0; i < n_workers; i++) {
         worker = &team->workers[i];
-        for (j = 0; j < worker->n_mcgs; j++) {
+        for (j = 0; j < worker->n_mcg; j++) {
             if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
-                status = ucc_tl_spin_team_setup_mcast_qp(ctx, worker, &team->mcgs_infos[mcgs_id], 1, j);
+                status = ucc_tl_spin_team_setup_mcast_qp(ctx, worker, &team->mcg_infos[mcg_id], 1, j);
                 assert(status == UCC_OK);
             } else {
                 ucc_assert(worker->type == UCC_TL_SPIN_WORKER_TYPE_RX);
-                status = ucc_tl_spin_team_setup_mcast_qp(ctx, worker, &team->mcgs_infos[mcgs_id], 0, j);
+                status = ucc_tl_spin_team_setup_mcast_qp(ctx, worker, &team->mcg_infos[mcg_id], 0, j);
                 ucc_assert(status == UCC_OK);
                 status = ucc_tl_spin_team_prepost_mcast_qp(ctx, worker, j);
                 ucc_assert(status == UCC_OK);
             }
             tl_debug(lib, "worker %d qp %d %p attached to cq %p", i, j, worker->qps[j], worker->cq);
-            mcgs_id = (mcgs_id + 1) % ctx->cfg.n_mcgs;
+            mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }
     }
     tl_debug(lib, "initialized multicast QPs");
@@ -470,8 +470,8 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     // Create and connect RC QPs
     ucc_tl_spin_team_init_p2p_qps(tl_team);
 
-    for (i = 0; i < ctx->cfg.n_mcgs; i++) {
-        status = ucc_tl_spin_team_prepare_mcgs(tl_team, &team->mcgs_infos[i], ctx->mcast.gid++);
+    for (i = 0; i < ctx->cfg.n_mcg; i++) {
+        status = ucc_tl_spin_team_prepare_mcg(tl_team, &team->mcg_infos[i], ctx->mcast.gid++);
         if (status != UCC_OK) {
             return status;
         }

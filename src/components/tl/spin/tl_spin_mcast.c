@@ -1,13 +1,13 @@
 #include "tl_spin_mcast.h"
 
 ucc_status_t
-ucc_tl_spin_team_fini_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs_addr)
+ucc_tl_spin_team_fini_mcg(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcg_addr)
 {
     ucc_base_lib_t *lib = UCC_TL_SPIN_CTX_LIB(ctx);
     char            buf[40];
     const char     *dst;
 
-    dst = inet_ntop(AF_INET6, &mcgs_addr->sin6_addr, buf, 40);
+    dst = inet_ntop(AF_INET6, &mcg_addr->sin6_addr, buf, 40);
     if (NULL == dst) {
         tl_error(lib, "inet_ntop failed");
         return UCC_ERR_NO_RESOURCE;
@@ -15,7 +15,7 @@ ucc_tl_spin_team_fini_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs
 
     tl_debug(lib, "mcast leave: ctx %p, buf: %s", ctx, buf);
 
-    if (rdma_leave_multicast(ctx->mcast.id, (struct sockaddr*)mcgs_addr)) {
+    if (rdma_leave_multicast(ctx->mcast.id, (struct sockaddr*)mcg_addr)) {
         tl_error(lib, "mcast rdma_leave_multicast failed");
         return UCC_ERR_NO_RESOURCE;
     }
@@ -94,13 +94,13 @@ get_cm_event:
 }
 
 ucc_status_t
-ucc_tl_spin_team_join_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs_saddr, 
+ucc_tl_spin_team_join_mcg(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcg_saddr, 
                            ucc_tl_spin_mcast_join_info_t *info, int is_root)
 {
     ucc_base_lib_t       *lib      = UCC_TL_SPIN_CTX_LIB(ctx);
     struct rdma_cm_event *cm_event;
 
-    info->status = ucc_tl_spin_mcast_join_mcast_post(ctx, mcgs_saddr, is_root);
+    info->status = ucc_tl_spin_mcast_join_mcast_post(ctx, mcg_saddr, is_root);
     if (info->status != UCC_OK) {
         tl_error(lib, "unable to join mcast group error %d", info->status);
         goto ret;
@@ -110,8 +110,8 @@ ucc_tl_spin_team_join_mcgs(ucc_tl_spin_context_t *ctx, struct sockaddr_in6 *mcgs
     info->status = ucc_tl_spin_mcast_join_mcast_test(ctx, &cm_event, is_root, 1); // TODO: make nonblocking
     if ((info->status == UCC_OK)) {
         ucc_assert(cm_event);
-        info->mcsg_addr.gid = cm_event->param.ud.ah_attr.grh.dgid;
-        info->mcsg_addr.lid = cm_event->param.ud.ah_attr.dlid;
+        info->mcg_addr.gid = cm_event->param.ud.ah_attr.grh.dgid;
+        info->mcg_addr.lid = cm_event->param.ud.ah_attr.dlid;
 
     }
 
@@ -129,20 +129,20 @@ ret:
 static
 ucc_status_t ucc_tl_spin_mcast_create_ah(ucc_tl_spin_context_t *ctx,
                                          ucc_tl_spin_worker_info_t *worker,
-                                         ucc_tl_spin_mcast_join_info_t *mcgs_info,
+                                         ucc_tl_spin_mcast_join_info_t *mcg_info,
                                          int qp_id)
 {
     struct ibv_ah_attr ah_attr = {
         .is_global     = 1,
         .grh           = {.sgid_index = 0},
-        .dlid          = mcgs_info->mcsg_addr.lid,
+        .dlid          = mcg_info->mcg_addr.lid,
         .sl            = DEF_SL,
         .src_path_bits = DEF_SRC_PATH_BITS,
         .port_num      = ctx->ib_port
     };
 
     memcpy(ah_attr.grh.dgid.raw,
-           mcgs_info->mcsg_addr.gid.raw,
+           mcg_info->mcg_addr.gid.raw,
            sizeof(ah_attr.grh.dgid.raw));
 
     worker->ahs[qp_id] = ibv_create_ah(ctx->mcast.pd, &ah_attr);
@@ -155,7 +155,7 @@ ucc_status_t ucc_tl_spin_mcast_create_ah(ucc_tl_spin_context_t *ctx,
 
 static ucc_status_t ucc_tl_spin_mcast_connect_qp(ucc_tl_spin_context_t *ctx,
                                                  ucc_tl_spin_worker_info_t *worker,
-                                                 ucc_tl_spin_mcast_join_info_t *mcgs_info,
+                                                 ucc_tl_spin_mcast_join_info_t *mcg_info,
                                                  int qp_id)
 {
     ucc_base_lib_t      *lib = UCC_TL_SPIN_CTX_LIB(ctx);
@@ -197,8 +197,8 @@ static ucc_status_t ucc_tl_spin_mcast_connect_qp(ucc_tl_spin_context_t *ctx,
     }
 
     if (ibv_attach_mcast(worker->qps[qp_id],
-                         &mcgs_info->mcsg_addr.gid,
-                         mcgs_info->mcsg_addr.lid)) {
+                         &mcg_info->mcg_addr.gid,
+                         mcg_info->mcg_addr.lid)) {
         tl_error(lib, "failed to attach QP to the mcast group, errno %d", errno);
         return UCC_ERR_NO_RESOURCE;
     }
@@ -216,7 +216,7 @@ static ucc_status_t ucc_tl_spin_mcast_connect_qp(ucc_tl_spin_context_t *ctx,
         return UCC_ERR_NO_RESOURCE;
     }
 
-    if (ucc_tl_spin_mcast_create_ah(ctx, worker, mcgs_info, qp_id) != UCC_OK) {
+    if (ucc_tl_spin_mcast_create_ah(ctx, worker, mcg_info, qp_id) != UCC_OK) {
         return UCC_ERR_NO_RESOURCE;
     }
 
@@ -226,7 +226,7 @@ static ucc_status_t ucc_tl_spin_mcast_connect_qp(ucc_tl_spin_context_t *ctx,
 ucc_status_t
 ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
                                 ucc_tl_spin_worker_info_t *worker,
-                                ucc_tl_spin_mcast_join_info_t *mcgs_info,
+                                ucc_tl_spin_mcast_join_info_t *mcg_info,
                                 int is_tx_qp, int qp_id)
 {
     ucc_base_lib_t         *lib          = UCC_TL_SPIN_CTX_LIB(ctx);
@@ -248,7 +248,7 @@ ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
         return UCC_ERR_NO_RESOURCE;
     }
 
-    return ucc_tl_spin_mcast_connect_qp(ctx, worker, mcgs_info, qp_id);
+    return ucc_tl_spin_mcast_connect_qp(ctx, worker, mcg_info, qp_id);
 }
 
 ucc_status_t 
