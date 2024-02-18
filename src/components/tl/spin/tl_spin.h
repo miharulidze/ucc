@@ -87,7 +87,7 @@ typedef struct ucc_tl_spin_reg {
 
 typedef struct ucc_tl_spin_rcache_region {
     ucc_rcache_region_t super;
-    ucc_tl_spin_reg_t  reg;
+    ucc_tl_spin_reg_t   reg;
 } ucc_tl_spin_rcache_region_t;
 
 typedef struct ucc_tl_spin_context {
@@ -145,7 +145,23 @@ typedef struct ucc_tl_spin_mcast_join_info {
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
-#define UCC_TL_SPIN_MAX_mcg    1
+typedef enum ucc_tl_spin_task_state {
+    UCC_TL_SPIN_TASK_STATE_POSTED   = 0,
+    UCC_TL_SPIN_TASK_STATE_SYNC_RNR = 1,
+    UCC_TL_SPIN_TASK_STATE_MCASTING = 2,
+} ucc_tl_spin_task_state_t;
+
+typedef struct ucc_tl_spin_task {
+    ucc_coll_task_t          super;
+    uint32_t                 id;
+    ucc_tl_spin_task_state_t state;
+    ucc_tl_spin_reg_t       *mkey;
+    void                    *base_ptr;
+    size_t                   per_thread_work;
+    /* other args going here */
+} ucc_tl_spin_task_t;
+
+#define UCC_TL_SPIN_MAX_mcg     1
 #define UCC_TL_SPIN_P2P_QPS_NUM 2 // 2 QPs to have ring (TODO: check service collectives)
 #define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_mcg))
 typedef struct ucc_tl_spin_team {
@@ -164,14 +180,11 @@ typedef struct ucc_tl_spin_team {
     int                            rx_compls;
     pthread_mutex_t                tx_compls_mutex;
     pthread_mutex_t                rx_compls_mutex;
+    uint32_t                       task_id;
+    ucc_tl_spin_task_t            *cur_task;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
-
-typedef struct ucc_tl_spin_task {
-    ucc_coll_task_t   super;
-    uint32_t          dummy_task_id;
-} ucc_tl_spin_task_t;
 
 #define UCC_TL_SPIN_SUPPORTED_COLLS (UCC_COLL_TYPE_BCAST)
 

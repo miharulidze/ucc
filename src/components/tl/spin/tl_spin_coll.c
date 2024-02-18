@@ -3,36 +3,37 @@
 #include "tl_spin_mcast.h"
 #include "tl_spin_p2p.h"
 
-static uint32_t tgid = 0;
-
-ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t *task);
+ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
+                                    ucc_base_coll_args_t *coll_args,
+                                    ucc_tl_spin_team_t   *team);
 
 static ucc_status_t ucc_tl_spin_coll_finalize(ucc_coll_task_t *coll_task)
 {
     ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
 
     tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", 
-             task, task->dummy_task_id);
+             task, task->id);
     ucc_mpool_put(task);
     return UCC_OK;
 }
 
 ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
-                                   ucc_base_team_t *team,
+                                   ucc_base_team_t *tl_team,
                                    ucc_coll_task_t **task_h)
 {
-    ucc_tl_spin_context_t *ctx = ucc_derived_of(team->context, ucc_tl_spin_context_t);
-    ucc_tl_spin_task_t *task   = NULL;
-    ucc_status_t status        = UCC_OK;
+    ucc_tl_spin_context_t *ctx    = ucc_derived_of(tl_team->context, ucc_tl_spin_context_t);
+    ucc_tl_spin_team_t    *team   = ucc_derived_of(tl_team, ucc_tl_spin_team_t);
+    ucc_tl_spin_task_t    *task   = NULL;
+    ucc_status_t           status = UCC_OK;
 
     task = ucc_mpool_get(&ctx->req_mp);
-    ucc_coll_task_init(&task->super, coll_args, team);
+    ucc_coll_task_init(&task->super, coll_args, tl_team);
 
     task->super.finalize = ucc_tl_spin_coll_finalize;
 
     switch (coll_args->args.coll_type) {
     case UCC_COLL_TYPE_BCAST:
-        status = ucc_tl_spin_bcast_init(task);
+        status = ucc_tl_spin_bcast_init(task, coll_args, team);
         break;
     default:
         tl_debug(UCC_TASK_LIB(task),
@@ -42,10 +43,9 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
         goto err;
     }
 
-    task->dummy_task_id = tgid++;
+    task->id = team->task_id++;
 
-    tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", 
-             task, task->dummy_task_id);
+    tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", task, task->id);
     *task_h = &task->super;
     return status;
 
@@ -62,6 +62,16 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
     ucc_rank_t                 root     = task->super.bargs.args.root;
     int                        comps    = 0;
     struct ibv_wc              wc[1];
+
+    // register send buffer here
+
+    // check if workers are busy
+    if (team->cur_task) {
+        ucc_assert_always(0); // test
+        goto enqueue;
+    } else {
+        team->cur_task = task;
+    }
 
     ucc_debug("barrier 1: rank %d", team->subset.myrank);
     // ring pass 1
@@ -106,6 +116,8 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         ucc_debug("barrier pass 2: rank %d, send OK", team->subset.myrank);
     }
 
+    // TODO: post work/task here
+
     // start workers
     if (team->subset.myrank == root) {
         pthread_mutex_lock(&team->tx_signal_mutex);
@@ -117,9 +129,9 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         pthread_mutex_unlock(&team->rx_signal_mutex);
     }
 
+enqueue:
     coll_task->status = UCC_INPROGRESS;
-    tl_debug(UCC_TASK_LIB(task), "start coll task ptr=%p tgid=%u",
-             task, task->dummy_task_id);
+    tl_debug(UCC_TASK_LIB(task), "start coll task ptr=%p tgid=%u", task, task->id);
     return ucc_progress_queue_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);
 }
 
@@ -131,6 +143,12 @@ void ucc_tl_spin_bcast_progress(ucc_coll_task_t *coll_task)
     int                    is_root       = team->subset.myrank == task->super.bargs.args.root ? 1 : 0;
     int                    total_workers = is_root ? ctx->cfg.n_tx_workers : ctx->cfg.n_rx_workers;
     int                    workers_completed;
+
+    if (task->id != team->cur_task->id) {
+        coll_task->status = UCC_INPROGRESS;
+    } else {
+        ucc_assert_always(task == team->cur_task);
+    }
 
     if (is_root) {
         pthread_mutex_lock(&team->tx_compls_mutex);
@@ -148,7 +166,7 @@ void ucc_tl_spin_bcast_progress(ucc_coll_task_t *coll_task)
         coll_task->status = UCC_INPROGRESS;
     }
 
-    //tl_debug(UCC_TASK_LIB(task), "progress coll task ptr=%p tgid=%u", task, task->dummy_task_id);
+    //tl_debug(UCC_TASK_LIB(task), "progress coll task ptr=%p tgid=%u", task, task->id);
 }
 
 ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
@@ -156,6 +174,13 @@ ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
     ucc_tl_spin_task_t    *task    = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
     ucc_tl_spin_team_t    *team    = UCC_TL_SPIN_TASK_TEAM(task);
     int                    is_root = team->subset.myrank == task->super.bargs.args.root ? 1 : 0;
+
+    if (task->id != team->cur_task->id) {
+        ucc_assert_always(0); // atm I don't know are there any scenario when we get into this branch
+        goto mpool_put;
+    } else {
+        ucc_assert_always(task == team->cur_task);
+    }
 
     if (is_root) {
         pthread_mutex_lock(&team->tx_signal_mutex);
@@ -173,17 +198,34 @@ ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
         pthread_mutex_unlock(&team->rx_compls_mutex);
     }
 
-    tl_debug(UCC_TASK_LIB(task), "finalize coll task ptr=%p tgid=%u",
-             task, task->dummy_task_id);
+    team->cur_task = NULL;
+
+mpool_put:
+    tl_debug(UCC_TASK_LIB(task), "finalize coll task ptr=%p tgid=%u", task, task->id);
     ucc_mpool_put(task);
     return UCC_OK;
 }
 
-ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t *task)
+ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
+                                    ucc_base_coll_args_t *coll_args,
+                                    ucc_tl_spin_team_t   *team)
 {
-    task->super.post     = ucc_tl_spin_bcast_start;
-    task->super.progress = ucc_tl_spin_bcast_progress;
-    task->super.finalize = ucc_tl_spin_bcast_finalize;
+    ucc_tl_spin_context_t *ctx       = UCC_TL_SPIN_TEAM_CTX(team);
+    size_t                 count     = coll_args->args.src.info.count;
+    size_t                 dt_size   = ucc_dt_size(coll_args->args.src.info.datatype);
+    int                    n_workers = ctx->cfg.n_tx_workers;
+
+    ucc_assert_always(count * dt_size > n_workers);
+    ucc_assert_always(((count * dt_size) % n_workers) == 0);
+    task->per_thread_work = count * dt_size / n_workers;
+    task->base_ptr        = coll_args->args.src.info.buffer;
+
+    task->super.post      = ucc_tl_spin_bcast_start;
+    task->super.progress  = ucc_tl_spin_bcast_progress;
+    task->super.finalize  = ucc_tl_spin_bcast_finalize;
+
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "got new bcast task of size %zu\n", count * dt_size);
+
     return UCC_OK;
 }
 
@@ -274,7 +316,8 @@ poll:
         pthread_mutex_lock(ctx->compls_mutex);
         (*(ctx->compls))++;
         pthread_mutex_unlock(ctx->compls_mutex);
-        break;
+        
+        goto poll;
 
     case (UCC_TL_SPIN_WORKER_FIN):
         break;

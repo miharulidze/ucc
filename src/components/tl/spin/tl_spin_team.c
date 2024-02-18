@@ -500,6 +500,9 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     // Spawn worker threads
     ucc_tl_spin_team_spawn_workers(tl_team);
 
+    team->task_id = 0;
+    team->cur_task = NULL;
+
     tl_info(lib, "initialized tl team: %p", team);
     return UCC_OK;
 }
