@@ -259,7 +259,8 @@ ucc_tl_spin_coll_worker_tx_start(ucc_tl_spin_worker_info_t *ctx)
     int ncomps            = 0;
     struct ibv_wc wc[1];
 
-    ucc_debug("tx thread got root start signal\n");
+    ucc_debug("tx thread got root start signal");
+    ucc_debug("tx thread got buf size: %zu task size: %zu", ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
     ucc_assert_always(buf && buf_mr);
     ucc_assert_always(ctx->signal != NULL);
 
@@ -281,6 +282,7 @@ ucc_tl_spin_coll_worker_rx_start(ucc_tl_spin_worker_info_t *ctx)
     int           ncomps;
 
     ucc_debug("rx thread started\n");
+    ucc_debug("rx thread got buf size: %zu task size: %zu", ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
     ncomps = ib_cq_poll(ctx->cq, 1, wc);
     ucc_assert_always(ncomps == 1);
     ucc_debug("rx thread got the multicasted buffer\n");

@@ -113,8 +113,12 @@ typedef enum
     UCC_TL_SPIN_WORKER_FIN   = 2
 } ucc_tl_spin_worker_signal_t;
 
+// forward declaration
+typedef struct ucc_tl_spin_team ucc_tl_spin_team_t;
+
 typedef struct ucc_tl_spin_worker_info {
     ucc_tl_spin_context_t       *ctx;
+    ucc_tl_spin_team_t          *team;
     ucc_tl_spin_worker_type_t    type;
     pthread_t                    pthread;
     struct ibv_cq               *cq;
@@ -141,25 +145,18 @@ typedef struct ucc_tl_spin_mcast_join_info {
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
-typedef enum ucc_tl_spin_task_state {
-    UCC_TL_SPIN_TASK_STATE_POSTED   = 0,
-    UCC_TL_SPIN_TASK_STATE_SYNC_RNR = 1,
-    UCC_TL_SPIN_TASK_STATE_MCASTING = 2,
-} ucc_tl_spin_task_state_t;
-
 typedef struct ucc_tl_spin_task {
     ucc_coll_task_t              super;
     uint32_t                     id;
-    ucc_tl_spin_task_state_t     state;
     size_t                       buf_size;
     size_t                       per_thread_work;
     void                        *base_ptr;
     ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;
 
-#define UCC_TL_SPIN_MAX_mcg     1
+#define UCC_TL_SPIN_MAX_MCG     1
 #define UCC_TL_SPIN_P2P_QPS_NUM 2 // 2 QPs to have ring (TODO: check service collectives)
-#define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_mcg))
+#define UCC_TL_SPIN_MAX_CQS_NUM (UCC_TL_SPIN_P2P_QPS_NUM + 2 * (UCC_TL_SPIN_MAX_MCG))
 typedef struct ucc_tl_spin_team {
     ucc_tl_team_t                  super;
     ucc_team_t                    *base_team;

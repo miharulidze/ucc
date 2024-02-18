@@ -112,6 +112,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
     for (i = 0; i < n_workers; i++) {
         worker         = &self->workers[i];
         worker->ctx    = ctx;
+        worker->team   = self;
         worker->type   = i < ctx->cfg.n_tx_workers ?
                          UCC_TL_SPIN_WORKER_TYPE_TX :
                          UCC_TL_SPIN_WORKER_TYPE_RX;
