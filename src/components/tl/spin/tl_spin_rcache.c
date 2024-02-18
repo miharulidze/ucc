@@ -22,13 +22,13 @@ rcache_reg_mr(void *context, ucc_rcache_t *rcache, //NOLINT: rcache is unused
                                                   ucc_tl_spin_rcache_region_t);
 
     *change_flag         = 1;
-    spin_rregion->reg.mr =
-        ibv_reg_mr(ctx->mcast.pd, addr, length,
-                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!spin_rregion->reg.mr) {
+    spin_rregion->mr = ibv_reg_mr(ctx->mcast.pd, addr, length,
+                                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    if (!spin_rregion->mr) {
         tl_error(ctx->super.super.lib, "failed to register memory");
         return UCS_ERR_NO_MESSAGE;
     }
+
     return UCS_OK;
 }
 
@@ -38,8 +38,7 @@ static void rcache_dereg_mr(void *context, //NOLINT: context is unused
 {
     ucc_tl_spin_rcache_region_t *spin_rregion =
         ucc_derived_of(rregion, ucc_tl_spin_rcache_region_t);
-
-    ibv_dereg_mr(spin_rregion->reg.mr);
+    ibv_dereg_mr(spin_rregion->mr);
 }
 
 static void ucc_tl_spin_rcache_dump_region_cb(void *context, //NOLINT
@@ -50,7 +49,7 @@ static void ucc_tl_spin_rcache_dump_region_cb(void *context, //NOLINT
     ucc_tl_spin_rcache_region_t *spin_rregion =
         ucc_derived_of(rregion, ucc_tl_spin_rcache_region_t);
 
-    snprintf(buf, max, "bar ptr:%p", spin_rregion->reg.mr);
+    snprintf(buf, max, "bar ptr:%p", spin_rregion->mr);
 }
 
 static ucc_rcache_ops_t ucc_tl_spin_rcache_ops = {

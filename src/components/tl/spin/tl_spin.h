@@ -81,13 +81,9 @@ typedef struct ucc_tl_spin_mcast_context {
     unsigned int               gid;
 } ucc_tl_spin_mcast_context_t;
 
-typedef struct ucc_tl_spin_reg {
-    struct ibv_mr *mr;
-} ucc_tl_spin_reg_t;
-
 typedef struct ucc_tl_spin_rcache_region {
     ucc_rcache_region_t super;
-    ucc_tl_spin_reg_t   reg;
+    struct ibv_mr      *mr;
 } ucc_tl_spin_rcache_region_t;
 
 typedef struct ucc_tl_spin_context {
@@ -152,13 +148,13 @@ typedef enum ucc_tl_spin_task_state {
 } ucc_tl_spin_task_state_t;
 
 typedef struct ucc_tl_spin_task {
-    ucc_coll_task_t          super;
-    uint32_t                 id;
-    ucc_tl_spin_task_state_t state;
-    ucc_tl_spin_reg_t       *mkey;
-    void                    *base_ptr;
-    size_t                   per_thread_work;
-    /* other args going here */
+    ucc_coll_task_t              super;
+    uint32_t                     id;
+    ucc_tl_spin_task_state_t     state;
+    size_t                       buf_size;
+    size_t                       per_thread_work;
+    void                        *base_ptr;
+    ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;
 
 #define UCC_TL_SPIN_MAX_mcg     1

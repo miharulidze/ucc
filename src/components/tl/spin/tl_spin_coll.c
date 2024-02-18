@@ -56,14 +56,28 @@ err:
 
 ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
 {
-    ucc_tl_spin_task_t        *task     = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
-    ucc_tl_spin_team_t        *team     = UCC_TL_SPIN_TASK_TEAM(task);
-    ucc_tl_spin_worker_info_t *ctrl_ctx = team->ctrl_ctx;
-    ucc_rank_t                 root     = task->super.bargs.args.root;
-    int                        comps    = 0;
-    struct ibv_wc              wc[1];
+    ucc_tl_spin_task_t          *task            = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
+    ucc_tl_spin_team_t          *team            = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_context_t       *ctx             = UCC_TL_SPIN_TEAM_CTX(team);
+    ucc_tl_spin_worker_info_t   *ctrl_ctx        = team->ctrl_ctx;
+    ucc_rank_t                   root            = task->super.bargs.args.root;
+    int                          reg_change_flag = 0;
+    int                          comps           = 0;
+    ucc_tl_spin_rcache_region_t *cache_entry;
+    struct ibv_wc                wc[1];
 
-    // register send buffer here
+    if (team->subset.myrank == root) {
+        errno = 0;
+        if (UCC_OK != ucc_rcache_get(ctx->rcache,
+                                     task->base_ptr,
+                                     task->buf_size,
+                                     &reg_change_flag, 
+                                     (ucc_rcache_region_t **)&cache_entry)) {
+            tl_error(UCC_TASK_LIB(task), "Root failed to register send buffer memory errno: %d", errno);
+            return UCC_ERR_NO_RESOURCE;
+        }
+        task->cached_mkey = cache_entry;
+    } 
 
     // check if workers are busy
     if (team->cur_task) {
@@ -73,47 +87,47 @@ ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         team->cur_task = task;
     }
 
-    ucc_debug("barrier 1: rank %d", team->subset.myrank);
+    tl_debug(UCC_TASK_LIB(task), "barrier 1: rank %d", team->subset.myrank);
     // ring pass 1
     if (team->subset.myrank == 0) {
         ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
-        ucc_debug("barrier pass 1: root rank, send OK");
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, send OK");
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
         ucc_assert_always(comps == 1);
         ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
-        ucc_debug("barrier pass 1: root rank, recv OK");
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, recv OK");
     } else {
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
         ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
-        ucc_debug("barrier pass 1: rank %d, recv OK", team->subset.myrank);
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, recv OK", team->subset.myrank);
         ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
-        ucc_debug("barrier pass 1: rank %d, send OK", team->subset.myrank);
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, send OK", team->subset.myrank);
     }
 
     // ring pass 2
     if (team->subset.myrank == 0) {
         ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
-        ucc_debug("barrier pass 2: root rank, send OK");
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, send OK");
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
         ucc_assert_always(comps == 1);
         ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
-        ucc_debug("barrier pass 2: root rank, recv OK");
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, recv OK");
     } else {
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
         ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
-        ucc_debug("barrier pass 2: rank %d, recv OK", team->subset.myrank);
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, recv OK", team->subset.myrank);
         ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
-        ucc_debug("barrier pass 2: rank %d, send OK", team->subset.myrank);
+        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, send OK", team->subset.myrank);
     }
 
     // TODO: post work/task here
@@ -173,6 +187,7 @@ ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
 {
     ucc_tl_spin_task_t    *task    = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
     ucc_tl_spin_team_t    *team    = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_context_t *ctx     = UCC_TL_SPIN_TEAM_CTX(team);
     int                    is_root = team->subset.myrank == task->super.bargs.args.root ? 1 : 0;
 
     if (task->id != team->cur_task->id) {
@@ -200,6 +215,10 @@ ucc_status_t ucc_tl_spin_bcast_finalize(ucc_coll_task_t *coll_task)
 
     team->cur_task = NULL;
 
+    if (is_root) {
+        ucc_rcache_region_put(ctx->rcache, &task->cached_mkey->super);
+    }
+
 mpool_put:
     tl_debug(UCC_TASK_LIB(task), "finalize coll task ptr=%p tgid=%u", task, task->id);
     ucc_mpool_put(task);
@@ -217,7 +236,8 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
 
     ucc_assert_always(count * dt_size > n_workers);
     ucc_assert_always(((count * dt_size) % n_workers) == 0);
-    task->per_thread_work = count * dt_size / n_workers;
+    task->buf_size        = count * dt_size;
+    task->per_thread_work = task->buf_size / n_workers;
     task->base_ptr        = coll_args->args.src.info.buffer;
 
     task->super.post      = ucc_tl_spin_bcast_start;
