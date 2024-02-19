@@ -120,6 +120,7 @@ typedef struct ucc_tl_spin_worker_info {
     ucc_tl_spin_context_t       *ctx;
     ucc_tl_spin_team_t          *team;
     ucc_tl_spin_worker_type_t    type;
+    unsigned int                 id;
     pthread_t                    pthread;
     struct ibv_cq               *cq;
     struct ibv_qp              **qps;

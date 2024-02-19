@@ -452,7 +452,8 @@ static ucc_status_t ucc_tl_spin_team_spawn_workers(ucc_base_team_t *tl_team)
     cpu_set_t                  cpuset;
    
     for (i = 0; i < n_workers; i++) {
-        worker    = &(team->workers[i]);
+        worker     = &(team->workers[i]);
+        worker->id = i;
         UCC_TL_SPIN_CHK_ERR(lib,
                             pthread_create(&worker->pthread, NULL, ucc_tl_spin_coll_worker_main, (void *)worker), 
                             status, UCC_ERR_NO_RESOURCE, err);

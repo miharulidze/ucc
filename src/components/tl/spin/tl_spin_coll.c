@@ -259,15 +259,16 @@ ucc_tl_spin_coll_worker_tx_start(ucc_tl_spin_worker_info_t *ctx)
     int ncomps            = 0;
     struct ibv_wc wc[1];
 
-    ucc_debug("tx thread got root start signal");
-    ucc_debug("tx thread got buf size: %zu task size: %zu", ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u got root start signal", ctx->id);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u got buf size: %zu task size: %zu", 
+             ctx->id, ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
     ucc_assert_always(buf && buf_mr);
     ucc_assert_always(ctx->signal != NULL);
 
     ib_qp_ud_post_mcast_send(ctx->qps[0], ctx->ahs[0], buf_mr, buf, 2048, 0);
     ncomps = ib_cq_poll(ctx->cq, 1, wc);
     ucc_assert_always(ncomps == 1);
-    ucc_debug("tx thread sent multicast\n");
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u sent multicast\n", ctx->id);
 
     ibv_dereg_mr(buf_mr);
     ucc_free(buf);
@@ -281,12 +282,13 @@ ucc_tl_spin_coll_worker_rx_start(ucc_tl_spin_worker_info_t *ctx)
     struct ibv_wc wc[1];
     int           ncomps;
 
-    ucc_debug("rx thread started\n");
-    ucc_debug("rx thread got buf size: %zu task size: %zu", ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u started", ctx->id);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u got buf size: %zu task size: %zu", 
+             ctx->id, ctx->team->cur_task->buf_size, ctx->team->cur_task->per_thread_work);
     ncomps = ib_cq_poll(ctx->cq, 1, wc);
     ucc_assert_always(ncomps == 1);
-    ucc_debug("rx thread got the multicasted buffer\n");
-    ucc_debug("rx thread exits\n");
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u got the multicasted buffer", ctx->id);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u exits\n", ctx->id);
 
     return UCC_OK;
 }
@@ -298,7 +300,7 @@ void *ucc_tl_spin_coll_worker_main(void *arg)
     ucc_status_t               status;
     int                        signal;
 
-    ucc_debug("worker thread started\n");
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread started", ctx->id);
 
 poll:
     pthread_mutex_lock(ctx->signal_mutex);
@@ -328,7 +330,7 @@ poll:
             break;
 
         default:
-            ucc_debug("worker thread shouldn't be here");
+            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
             ucc_assert_always(0);
         }
 
@@ -338,19 +340,19 @@ poll:
         pthread_mutex_lock(ctx->compls_mutex);
         (*(ctx->compls))++;
         pthread_mutex_unlock(ctx->compls_mutex);
-        
+
         goto poll;
 
     case (UCC_TL_SPIN_WORKER_FIN):
         break;
 
     default:
-        ucc_debug("worker thread shouldn't be here\n");
+        tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
         ucc_assert_always(0);
         break;
     }
 
-    ucc_debug("worker thread exits\n");
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread exits", ctx->id);
 
     return arg;
 }
