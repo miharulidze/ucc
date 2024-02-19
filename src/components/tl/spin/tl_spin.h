@@ -34,6 +34,7 @@ typedef struct ucc_tl_spin_context_config {
     int                     n_rx_workers;
     int                     mcast_cq_depth;
     int                     mcast_qp_depth;
+    int                     mcast_tx_batch_sz;
     int                     p2p_cq_depth;
     int                     p2p_qp_depth;
     int                     start_core_id;
@@ -116,6 +117,8 @@ typedef enum
 // forward declaration
 typedef struct ucc_tl_spin_team ucc_tl_spin_team_t;
 
+#define UCC_TL_SPIN_IB_GRH_FOOTPRINT 64 // to make sure it is aligned
+
 typedef struct ucc_tl_spin_worker_info {
     ucc_tl_spin_context_t       *ctx;
     ucc_tl_spin_team_t          *team;
@@ -125,9 +128,17 @@ typedef struct ucc_tl_spin_worker_info {
     struct ibv_cq               *cq;
     struct ibv_qp              **qps;
     struct ibv_ah              **ahs;
+    struct ibv_send_wr         **swrs;
+    struct ibv_sge             **ssges;
+    struct ibv_recv_wr         **rwrs;
+    struct ibv_sge             **rsges;
     struct ibv_mr              **staging_rbuf_mr;
     char                       **staging_rbuf;
-    uint32_t                     staging_rbuf_len;
+    struct ibv_mr              **grh_buf_mr;
+    char                       **grh_buf;
+    size_t                      *tail_idx;
+    size_t                       staging_rbuf_len;
+    size_t                       grh_buf_len;
     uint32_t                     n_mcg;
     ucc_tl_spin_worker_signal_t *signal;
     pthread_mutex_t             *signal_mutex;
@@ -148,9 +159,15 @@ typedef struct ucc_tl_spin_mcast_join_info {
 
 typedef struct ucc_tl_spin_task {
     ucc_coll_task_t              super;
+    int                          coll_type;
     uint32_t                     id;
     size_t                       buf_size;
     size_t                       per_thread_work;
+    size_t                       batch_bsize;
+    size_t                       n_batches;
+    size_t                       last_batch_size;
+    size_t                       last_pkt_size;
+    size_t                       pkts_to_recv;
     void                        *base_ptr;
     ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;

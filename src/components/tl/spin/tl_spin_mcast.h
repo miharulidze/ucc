@@ -20,14 +20,24 @@ ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
                                 ucc_tl_spin_worker_info_t *worker,
                                 ucc_tl_spin_mcast_join_info_t *mcg_info,
                                 int is_tx_qp, int qp_id);
-ucc_status_t 
+ucc_status_t
+ucc_tl_spin_prepare_mcg_rwrs(struct ibv_recv_wr *wrs, struct ibv_sge *sges,
+                             char *grh_buf, struct ibv_mr *grh_buf_mr,
+                             char *staging_rbuf, struct ibv_mr *staging_rbuf_mr,
+                             size_t mtu, size_t qp_depth);
+ucc_status_t
 ucc_tl_spin_team_prepost_mcast_qp(ucc_tl_spin_context_t *ctx,
                                   ucc_tl_spin_worker_info_t *worker,
                                   int qp_id);
-
 void
-ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah,
+ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah, struct ibv_send_wr *wr,
                          struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id);
+void
+ib_qp_ud_post_mcast_send_batch(struct ibv_qp *qp, struct ibv_ah *ah, 
+                               struct ibv_send_wr *wrs, struct ibv_sge *sges,
+                               struct ibv_mr *mr, void *buf, uint32_t len, 
+                               size_t batch_size, uint64_t start_id);
+void ib_qp_post_recv_wr(struct ibv_qp *qp, struct ibv_recv_wr *wr);
 void ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
                      void *buf, uint32_t len, uint64_t id);
 int ib_cq_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs);

@@ -235,7 +235,7 @@ ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
     qp_init_attr.qp_type             = IBV_QPT_UD;
     qp_init_attr.send_cq             = worker->cq;
     qp_init_attr.recv_cq             = worker->cq;
-    qp_init_attr.sq_sig_all          = 1;
+    qp_init_attr.sq_sig_all          = 0;
     qp_init_attr.cap.max_send_wr     = is_tx_qp  ? ctx->cfg.mcast_qp_depth : 0;
     qp_init_attr.cap.max_recv_wr     = !is_tx_qp ? ctx->cfg.mcast_qp_depth : 0;
     //qp_init_attr.cap.max_inline_data = sr_inline;
@@ -257,19 +257,56 @@ ucc_tl_spin_team_prepost_mcast_qp(ucc_tl_spin_context_t *ctx,
                                   int qp_id)
 {
     struct ibv_qp *qp       = worker->qps[qp_id];
-    struct ibv_mr *rbuf_mr  = worker->staging_rbuf_mr[qp_id];
-    char          *rbuf     = worker->staging_rbuf[qp_id];
     int            i;
 
     for (i = 0; i < ctx->cfg.mcast_qp_depth; i++) {
-        ib_qp_post_recv(qp, rbuf_mr, rbuf, ctx->mcast.mtu, 0);
-        rbuf += ctx->mcast.mtu;
+        ib_qp_post_recv_wr(qp, &worker->rwrs[qp_id][i]);
     }
 
     return UCC_OK;
 }
 
-void
+ucc_status_t
+ucc_tl_spin_prepare_mcg_rwrs(struct ibv_recv_wr *wrs, struct ibv_sge *sges,
+                             char *grh_buf, struct ibv_mr *grh_buf_mr,
+                             char *staging_rbuf, struct ibv_mr *staging_rbuf_mr,
+                             size_t mtu, size_t qp_depth)
+{
+    int i, j;
+
+    for (i = 0, j = 0; i < qp_depth; i++, j += 2) {
+        memset(&sges[j], 0, 2 * sizeof(sges[j]));
+
+        // GRH
+        sges[j].addr   = (uint64_t)grh_buf;
+        sges[j].lkey   = grh_buf_mr->lkey;
+        sges[j].length = 40;
+        grh_buf += UCC_TL_SPIN_IB_GRH_FOOTPRINT;
+
+        // Payload
+        sges[j + 1].addr   = (uint64_t)staging_rbuf;
+        sges[j + 1].lkey   = staging_rbuf_mr->lkey;
+        sges[j + 1].length = mtu;
+        staging_rbuf += mtu;
+
+        memset(&wrs[i], 0, sizeof(struct ibv_recv_wr));
+        wrs[i].sg_list = &sges[j];
+        wrs[i].num_sge = 2;
+    }
+
+    return UCC_OK;
+}
+
+inline void ib_qp_post_recv_wr(struct ibv_qp *qp, struct ibv_recv_wr *wr)
+{
+    struct ibv_recv_wr *bad_wr;
+    if (ibv_post_recv(qp, wr, &bad_wr)) {
+        ucc_debug("failed to post recv request, errno: %d", errno);
+        return;
+    }
+}
+
+inline void
 ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
                 void *buf, uint32_t len, uint64_t id)
 {
@@ -295,12 +332,11 @@ ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
     }
 }
 
-void
-ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah,
+inline void
+ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah, struct ibv_send_wr *wr,
                          struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id)
 {
     struct ibv_sge sg;
-    struct ibv_send_wr wr;
     struct ibv_send_wr *bad_wr;
 
     memset(&sg, 0, sizeof(sg));
@@ -308,17 +344,53 @@ ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah,
     sg.length = len;
     sg.lkey	  = mr->lkey;
 
-    memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = id;
-    wr.sg_list    = &sg;
-    wr.num_sge    = 1;
-    wr.opcode     = IBV_WR_SEND_WITH_IMM;
+    memset(wr, 0, sizeof(*wr));
+    wr->imm_data   = id;
+    wr->wr_id      = 0; // TODO: set thread/qp id
+    wr->sg_list    = &sg;
+    wr->num_sge    = 1;
+    wr->opcode     = IBV_WR_SEND_WITH_IMM;
+    wr->send_flags = IBV_SEND_SIGNALED;
 
-    wr.wr.ud.ah          = ah;
-    wr.wr.ud.remote_qpn  = 0xFFFFFF;
-    wr.wr.ud.remote_qkey = DEF_QKEY;
+    wr->wr.ud.ah          = ah;
+    wr->wr.ud.remote_qpn  = 0xFFFFFF;
+    wr->wr.ud.remote_qkey = DEF_QKEY;
 
-    if (ibv_post_send(qp, &wr, &bad_wr)) {
+    if (ibv_post_send(qp, wr, &bad_wr)) {
+        ucc_error("failed to post multicast send request, errno: %d", errno);
+    }
+}
+
+inline void
+ib_qp_ud_post_mcast_send_batch(struct ibv_qp *qp, struct ibv_ah *ah, 
+                               struct ibv_send_wr *wrs, struct ibv_sge *sges,
+                               struct ibv_mr *mr, void *buf, uint32_t len, 
+                               size_t batch_size, uint64_t start_id)
+{
+    struct ibv_send_wr *bad_wr;
+    int i;
+
+    for (i = 0; i < batch_size; i++, buf += len, start_id++) {
+        memset(&sges[i], 0, sizeof(struct ibv_sge));
+        sges[i].addr   = (uintptr_t)buf;
+        sges[i].length = len;
+        sges[i].lkey   = mr->lkey;
+
+        memset(&wrs[i], 0, sizeof(struct ibv_send_wr));
+        wrs[i].imm_data = start_id++;
+        wrs[i].wr_id    = 0; // TODO: set thread/qp id
+        wrs[i].next     = (i == (batch_size - 1)) ? NULL : &wrs[i + 1];
+        wrs[i].sg_list  = &sges[i];
+        wrs[i].num_sge  = 1;
+        wrs[i].opcode   = IBV_WR_SEND_WITH_IMM;
+
+        wrs[i].wr.ud.ah          = ah;
+        wrs[i].wr.ud.remote_qpn  = 0xFFFFFF;
+        wrs[i].wr.ud.remote_qkey = DEF_QKEY;
+    }
+    wrs[batch_size - 1].send_flags = IBV_SEND_SIGNALED;
+
+    if (ibv_post_send(qp, wrs, &bad_wr)) {
         ucc_error("failed to post multicast send request, errno: %d", errno);
     }
 }

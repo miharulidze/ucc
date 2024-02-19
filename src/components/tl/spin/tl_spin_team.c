@@ -141,14 +141,49 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                             ibv_create_cq(ctx->mcast.dev, ctx->cfg.mcast_cq_depth, NULL, NULL, 0), 
                             worker->cq, status, UCC_ERR_NO_MEMORY, ret);
         tl_debug(tl_context->lib, "worker %d created cq %p", i, worker->cq);
+        
+        if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_recv_wr *)),
+                                worker->swrs, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_sge *)),
+                                worker->ssges, status, UCC_ERR_NO_MEMORY, ret);
+            for (j = 0; j < worker->n_mcg; j++) {
+                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                    ucc_calloc(ctx->cfg.mcast_tx_batch_sz, sizeof(struct ibv_send_wr)),
+                                    worker->swrs[j], status, UCC_ERR_NO_MEMORY, ret);
+                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                    ucc_calloc(ctx->cfg.mcast_tx_batch_sz, sizeof(struct ibv_sge)),
+                                    worker->ssges[j], status, UCC_ERR_NO_MEMORY, ret);
+            }
+        }
+
         if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(size_t)),
+                                worker->tail_idx, status, UCC_ERR_NO_MEMORY, ret);
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                                 ucc_calloc(worker->n_mcg, sizeof(char *)),
                                 worker->staging_rbuf, status, UCC_ERR_NO_MEMORY, ret);
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                                 ucc_calloc(worker->n_mcg, sizeof(struct ibv_mr *)),
                                 worker->staging_rbuf_mr, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(char *)),
+                                worker->grh_buf, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_mr *)),
+                                worker->grh_buf_mr, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_recv_wr *)),
+                                worker->rwrs, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(worker->n_mcg, sizeof(struct ibv_sge *)),
+                                worker->rsges, status, UCC_ERR_NO_MEMORY, ret);
+            
             worker->staging_rbuf_len = ctx->mcast.mtu * ctx->cfg.mcast_qp_depth;
+            worker->grh_buf_len      = UCC_TL_SPIN_IB_GRH_FOOTPRINT * ctx->cfg.mcast_qp_depth;
             for (j = 0; j < worker->n_mcg; j++) {
                 if (posix_memalign((void **)&worker->staging_rbuf[j], 64, worker->staging_rbuf_len)) {
                     tl_error(tl_context->lib, "allocation of staging buffer failed");
@@ -163,6 +198,32 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                     tl_error(tl_context->lib, "registration of staging buffer failed");
                     return UCC_ERR_NO_MEMORY;
                 }
+
+                if (posix_memalign((void **)&worker->grh_buf[j], 64, worker->grh_buf_len)) {
+                    tl_error(tl_context->lib, "allocation of ghr buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
+                worker->grh_buf_mr[j] = ibv_reg_mr(ctx->mcast.pd, worker->grh_buf[j], 
+                                                   worker->grh_buf_len,
+                                                   IBV_ACCESS_REMOTE_WRITE |
+                                                   IBV_ACCESS_LOCAL_WRITE  |
+                                                   IBV_ACCESS_REMOTE_READ);
+                if (!worker->grh_buf_mr[j]) {
+                    tl_error(tl_context->lib, "registration of ghr buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
+                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                    ucc_calloc(ctx->cfg.mcast_qp_depth, sizeof(struct ibv_recv_wr)),
+                                    worker->rwrs[j], status, UCC_ERR_NO_MEMORY, ret);
+                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                    ucc_calloc(ctx->cfg.mcast_qp_depth * 2, sizeof(struct ibv_sge)),
+                                    worker->rsges[j], status, UCC_ERR_NO_MEMORY, ret);
+                status = ucc_tl_spin_prepare_mcg_rwrs(worker->rwrs[j], worker->rsges[j],
+                                                      worker->grh_buf[j], worker->grh_buf_mr[j],
+                                                      worker->staging_rbuf[j], worker->staging_rbuf_mr[j],
+                                                      ctx->mcast.mtu, ctx->cfg.mcast_qp_depth);
+                ucc_assert_always(status == UCC_OK);
+                worker->tail_idx[j] = 0;
             }
         }
     }
@@ -237,13 +298,28 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
                         tl_error(lib, "worker %d failed to destroy staging_rbuf_mr[%d], errno: %d", i, j, errno);
                     }
                     free(worker->staging_rbuf[j]);
+                    if (ibv_dereg_mr(worker->grh_buf_mr[j])) {
+                        tl_error(lib, "worker %d failed to destroy grh_buf_mr[%d], errno: %d", i, j, errno);
+                    }
+                    free(worker->grh_buf[j]);
+                }
+                if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
+                    ucc_free(worker->swrs[j]);
+                    ucc_free(worker->ssges[j]);
                 }
             }
             ucc_free(worker->qps);
             ucc_free(worker->ahs);
+            if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
+                    ucc_free(worker->swrs);
+                    ucc_free(worker->ssges);
+            }
             if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
                 ucc_free(worker->staging_rbuf);
                 ucc_free(worker->staging_rbuf_mr);
+                ucc_free(worker->grh_buf);
+                ucc_free(worker->grh_buf_mr);
+                ucc_free(worker->tail_idx);
             }
             mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }

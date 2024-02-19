@@ -49,6 +49,10 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      ucc_offsetof(ucc_tl_spin_context_config_t, mcast_qp_depth),
      UCC_CONFIG_TYPE_INT},
 
+    {"MCAST_TX_BATCH_SZ", "128", "Size of batch with MTU-sized multicast sends",
+     ucc_offsetof(ucc_tl_spin_context_config_t, mcast_tx_batch_sz),
+     UCC_CONFIG_TYPE_INT},
+
     {"P2P_CQ_DEPTH", "128", "P2P CQ depth",
      ucc_offsetof(ucc_tl_spin_context_config_t, p2p_cq_depth),
      UCC_CONFIG_TYPE_INT},
