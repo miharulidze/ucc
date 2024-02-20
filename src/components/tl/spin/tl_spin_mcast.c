@@ -377,7 +377,7 @@ ib_qp_ud_post_mcast_send_batch(struct ibv_qp *qp, struct ibv_ah *ah,
         sges[i].lkey   = mr->lkey;
 
         memset(&wrs[i], 0, sizeof(struct ibv_send_wr));
-        wrs[i].imm_data = start_id++;
+        wrs[i].imm_data = start_id;
         wrs[i].wr_id    = 0; // TODO: set thread/qp id
         wrs[i].next     = (i == (batch_size - 1)) ? NULL : &wrs[i + 1];
         wrs[i].sg_list  = &sges[i];
