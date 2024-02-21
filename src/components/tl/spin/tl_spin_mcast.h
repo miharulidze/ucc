@@ -31,12 +31,13 @@ ucc_tl_spin_team_prepost_mcast_qp(ucc_tl_spin_context_t *ctx,
                                   int qp_id);
 void
 ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah, struct ibv_send_wr *wr,
-                         struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id);
+                         struct ibv_mr *mr, void *buf, uint32_t len, uint32_t id);
 void
 ib_qp_ud_post_mcast_send_batch(struct ibv_qp *qp, struct ibv_ah *ah, 
                                struct ibv_send_wr *wrs, struct ibv_sge *sges,
                                struct ibv_mr *mr, void *buf, uint32_t len, 
-                               size_t batch_size, uint64_t start_id);
+                               size_t batch_size, 
+                               ucc_tl_spin_packed_chunk_id_t start_chunk);
 void ib_qp_post_recv_wr(struct ibv_qp *qp, struct ibv_recv_wr *wr);
 void ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
                      void *buf, uint32_t len, uint64_t id);

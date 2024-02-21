@@ -159,6 +159,16 @@ typedef struct ucc_tl_spin_mcast_join_info {
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
+#define UCC_TL_SPIN_MAX_TASKS 16
+
+typedef union ucc_tl_spin_packed_chunk_id {
+    struct {
+        uint32_t task_id  : 4;
+        uint32_t chunk_id : 28;
+    } chunk_metadata;
+    uint32_t imm_data;
+} ucc_tl_spin_packed_chunk_id_t;
+
 typedef struct ucc_tl_spin_task {
     ucc_coll_task_t              super;
     int                          coll_type;

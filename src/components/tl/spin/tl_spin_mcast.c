@@ -334,7 +334,7 @@ ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
 
 inline void
 ib_qp_ud_post_mcast_send(struct ibv_qp *qp, struct ibv_ah *ah, struct ibv_send_wr *wr,
-                         struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id)
+                         struct ibv_mr *mr, void *buf, uint32_t len, uint32_t id)
 {
     struct ibv_sge sg;
     struct ibv_send_wr *bad_wr;
@@ -365,19 +365,20 @@ inline void
 ib_qp_ud_post_mcast_send_batch(struct ibv_qp *qp, struct ibv_ah *ah, 
                                struct ibv_send_wr *wrs, struct ibv_sge *sges,
                                struct ibv_mr *mr, void *buf, uint32_t len, 
-                               size_t batch_size, uint64_t start_id)
+                               size_t batch_size, 
+                               ucc_tl_spin_packed_chunk_id_t start_chunk)
 {
     struct ibv_send_wr *bad_wr;
     int i;
 
-    for (i = 0; i < batch_size; i++, buf += len, start_id++) {
+    for (i = 0; i < batch_size; i++, buf += len, start_chunk.chunk_metadata.chunk_id++) {
         memset(&sges[i], 0, sizeof(struct ibv_sge));
         sges[i].addr   = (uintptr_t)buf;
         sges[i].length = len;
         sges[i].lkey   = mr->lkey;
 
         memset(&wrs[i], 0, sizeof(struct ibv_send_wr));
-        wrs[i].imm_data = start_id;
+        wrs[i].imm_data = start_chunk.imm_data;
         wrs[i].wr_id    = 0; // TODO: set thread/qp id
         wrs[i].next     = (i == (batch_size - 1)) ? NULL : &wrs[i + 1];
         wrs[i].sg_list  = &sges[i];
