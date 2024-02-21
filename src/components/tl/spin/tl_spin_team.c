@@ -526,7 +526,7 @@ static ucc_status_t ucc_tl_spin_team_spawn_workers(ucc_base_team_t *tl_team)
     int                        num_cores = sysconf(_SC_NPROCESSORS_ONLN);
     int                        i;
     cpu_set_t                  cpuset;
-   
+
     for (i = 0; i < n_workers; i++) {
         worker     = &(team->workers[i]);
         worker->id = i % ctx->cfg.n_mcg;

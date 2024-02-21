@@ -234,7 +234,7 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
     size_t                 dt_size     = ucc_dt_size(coll_args->args.src.info.datatype);
     int                    n_workers   = ctx->cfg.n_tx_workers;
 
-    ucc_assert_always(count * dt_size > n_workers);
+    ucc_assert_always(count * dt_size >= n_workers);
     ucc_assert_always(((count * dt_size) % n_workers) == 0);
 
     task->base_ptr        = coll_args->args.src.info.buffer;
@@ -256,6 +256,12 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
         task->pkts_to_recv++;
     }
 
+    task->timeout = ((double)task->per_thread_work /
+                    (double)ctx->cfg.link_bw) / 
+                    1000000000.0 * 
+                    (double)ctx->cfg.timeout_scaling_param;
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "work: %zu, bw: %d, task timeout: %.16lf, scaling param: %d", 
+             task->per_thread_work, ctx->cfg.link_bw, task->timeout, ctx->cfg.timeout_scaling_param);
     task->super.post      = ucc_tl_spin_bcast_start;
     task->super.progress  = ucc_tl_spin_bcast_progress;
     task->super.finalize  = ucc_tl_spin_bcast_finalize;
@@ -331,16 +337,19 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
     return UCC_OK;
 }
 
-inline ucc_status_t
+ucc_status_t
 ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_tl_spin_task_t *task     = ctx->team->cur_task;
-    void               *rbuf     = ctx->staging_rbuf[0];
-    size_t             *tail_idx = &ctx->tail_idx[0];
-    void               *buf      = task->base_ptr + ctx->id * task->per_thread_work;
-    size_t              to_recv  = task->pkts_to_recv;
-    size_t              mtu      = ctx->ctx->mcast.mtu;
-    size_t              chunk_id;
+    ucc_tl_spin_task_t *task          = ctx->team->cur_task;
+    void               *rbuf          = ctx->staging_rbuf[0];
+    size_t             *tail_idx      = &ctx->tail_idx[0];
+    void               *buf           = task->base_ptr + ctx->id * task->per_thread_work;
+    size_t              to_recv       = task->pkts_to_recv;
+    size_t              mtu           = ctx->ctx->mcast.mtu;
+    double              timeout       = task->timeout;
+    size_t              chunk_id      = 0;
+    size_t              prev_chunk_id = 0;
+    double              t_start, t_end;
     size_t              pkt_len;
     struct ibv_wc       wc[1];
     int                 ncomps;
@@ -349,26 +358,40 @@ ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
             "rx worker %u got bcast task of size: %zu n_batches: %zu last_batch_size: %zu last_pkt_sz: %zu buf: %p", 
              ctx->id, task->per_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size, buf);
 
-    while (to_recv) {
-        ncomps = ib_cq_poll(ctx->cq, 1, wc);
-        ucc_assert_always(ncomps == 1);
-        ucc_assert_always(wc->byte_len > 40);
-        pkt_len  = wc->byte_len - 40;
-        chunk_id = wc->imm_data;
-        tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
-                 "rx worker %u got bcasted chunk of size: %zu, id: %zu, tail_idx: %zu",
-                 ctx->id, pkt_len, chunk_id, *tail_idx);
-        ucc_assert_always(mtu * (*tail_idx) <= ctx->staging_rbuf_len);
-        tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
-                 "rx worker %u memcpy src: %p, dst: %p",
-                 ctx->id, buf + mtu * chunk_id, rbuf + mtu * (*tail_idx));
-        memcpy(buf + mtu * chunk_id, rbuf + mtu * (*tail_idx), pkt_len);
-        ib_qp_post_recv_wr(ctx->qps[0], &ctx->rwrs[0][*tail_idx]);
-        *tail_idx = (*tail_idx + 1) % ctx->ctx->cfg.mcast_qp_depth;
-        to_recv--;
-        tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
-                 "rx worker %u stored chunk of size: %zu, id: %zu",
-                 ctx->id, pkt_len, chunk_id);
+    t_start = ucc_get_time();
+    t_end   = t_start;
+    while (to_recv && (((t_end - t_start) < timeout))) {
+        ncomps = ib_cq_try_poll(ctx->cq, 1, wc);
+        if (ncomps) {
+            ucc_assert_always(ncomps == 1);
+            ucc_assert_always(wc->byte_len > 40);
+            pkt_len  = wc->byte_len - 40;
+            chunk_id = wc->imm_data;
+            ucc_assert_always(prev_chunk_id <= chunk_id);
+            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
+                     "rx worker %u got bcasted chunk of size: %zu, id: %zu, tail_idx: %zu",
+                     ctx->id, pkt_len, chunk_id, *tail_idx);
+            ucc_assert_always(mtu * (*tail_idx) <= ctx->staging_rbuf_len);
+            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
+                     "rx worker %u memcpy src: %p, dst: %p",
+                     ctx->id, buf + mtu * chunk_id, rbuf + mtu * (*tail_idx));
+            memcpy(buf + mtu * chunk_id, rbuf + mtu * (*tail_idx), pkt_len);
+            ib_qp_post_recv_wr(ctx->qps[0], &ctx->rwrs[0][*tail_idx]);
+            *tail_idx = (*tail_idx + 1) % ctx->ctx->cfg.mcast_qp_depth;
+            to_recv--;
+            prev_chunk_id = chunk_id;
+            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
+                     "rx worker %u stored chunk of size: %zu, id: %zu",
+                     ctx->id, pkt_len, chunk_id);
+        }
+        t_end = ucc_get_time();
+        ucc_assert_always(t_start <= t_end);
+    }
+
+    if (to_recv) {
+        tl_error(UCC_TL_SPIN_TEAM_LIB(ctx->team),
+                 "rx worker %u got timed out. remaining work of %zu. last recvd chunk id: %zu",
+                 ctx->id, to_recv, chunk_id);
     }
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u finished and exits\n", ctx->id);
@@ -389,7 +412,7 @@ poll:
     pthread_mutex_lock(ctx->signal_mutex);
     signal = *(ctx->signal);
     pthread_mutex_unlock(ctx->signal_mutex);
-    
+
     switch (signal) {
 
     case (UCC_TL_SPIN_WORKER_POLL):

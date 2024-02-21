@@ -414,3 +414,23 @@ int ib_cq_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs) {
 
     return ncomp;
 }
+
+int ib_cq_try_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs) {
+    int i, ncomp = 0;
+
+    ncomp = ibv_poll_cq(cq, max_batch_size, wcs);
+
+    if (ncomp < 0) {
+        ucc_debug("poll_cq err=%d errno=%d", ncomp, errno);
+    }
+
+    if (ncomp > 0) {
+        for (i = 0; i < ncomp; i++) {
+            if (wcs[i].status != IBV_WC_SUCCESS) {
+                ucc_debug("WCE err=%d", wcs[i].status);
+            }
+        }
+    }
+
+    return ncomp;
+}

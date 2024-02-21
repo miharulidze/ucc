@@ -65,6 +65,14 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      ucc_offsetof(ucc_tl_spin_context_config_t, start_core_id),
      UCC_CONFIG_TYPE_INT},
 
+    {"LINK_BW", "7", "Link bandwidth in GB/s", // CX-3 == 56Gbit/s == 7GB/s
+     ucc_offsetof(ucc_tl_spin_context_config_t, link_bw),
+     UCC_CONFIG_TYPE_INT},
+
+    {"TIMEOUT_SCALING", "5", "Scaling of receive handler loop timeout", // CX-3 == 56Gbit/s == 7GB/s
+     ucc_offsetof(ucc_tl_spin_context_config_t, timeout_scaling_param),
+     UCC_CONFIG_TYPE_INT},
+
     {NULL}};
 
 UCC_CLASS_DEFINE_NEW_FUNC(ucc_tl_spin_context_t, ucc_base_context_t,

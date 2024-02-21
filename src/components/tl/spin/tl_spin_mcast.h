@@ -41,5 +41,6 @@ void ib_qp_post_recv_wr(struct ibv_qp *qp, struct ibv_recv_wr *wr);
 void ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
                      void *buf, uint32_t len, uint64_t id);
 int ib_cq_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs);
+int ib_cq_try_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs);
 
 #endif

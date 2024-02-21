@@ -38,6 +38,8 @@ typedef struct ucc_tl_spin_context_config {
     int                     p2p_cq_depth;
     int                     p2p_qp_depth;
     int                     start_core_id;
+    int                     link_bw;
+    int                     timeout_scaling_param;
 } ucc_tl_spin_context_config_t;
 
 typedef struct ucc_tl_spin_lib {
@@ -168,6 +170,7 @@ typedef struct ucc_tl_spin_task {
     size_t                       last_batch_size;
     size_t                       last_pkt_size;
     size_t                       pkts_to_recv;
+    double                       timeout;
     void                        *base_ptr;
     ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;
