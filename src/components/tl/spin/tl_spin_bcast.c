@@ -35,6 +35,12 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         team->cur_task = task;
     }
 
+    if (team->subset.myrank != root) {
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+        team->rx_signal = UCC_TL_SPIN_WORKER_START;
+        pthread_mutex_unlock(&team->rx_signal_mutex);
+    }
+
     tl_debug(UCC_TASK_LIB(task), "barrier 1: rank %d", team->subset.myrank);
     // ring pass 1
     if (team->subset.myrank == 0) {
@@ -85,10 +91,6 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         pthread_mutex_lock(&team->tx_signal_mutex);
         team->tx_signal = UCC_TL_SPIN_WORKER_START;
         pthread_mutex_unlock(&team->tx_signal_mutex);
-    } else {
-        pthread_mutex_unlock(&team->rx_signal_mutex);
-        team->rx_signal = UCC_TL_SPIN_WORKER_START;
-        pthread_mutex_unlock(&team->rx_signal_mutex);
     }
 
 enqueue:
