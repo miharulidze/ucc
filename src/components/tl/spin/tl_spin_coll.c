@@ -301,7 +301,7 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
                                        buf,
                                        ctx->ctx->mcast.mtu,
                                        ctx->ctx->cfg.mcast_tx_batch_sz,
-                                       packed_chunk_id);
+                                       packed_chunk_id, 0);
         ncomps = ib_cq_poll(ctx->cq, 1, &wc); // only last packet in batch reports CQe
         ucc_assert_always(ncomps == 1);
         buf                      += task->batch_bsize;
@@ -316,7 +316,7 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
                                        buf,
                                        ctx->ctx->mcast.mtu,
                                        task->last_batch_size,
-                                       packed_chunk_id);
+                                       packed_chunk_id, 0);
         ncomps = ib_cq_poll(ctx->cq, 1, &wc);
         ucc_assert_always(ncomps == 1);
         buf                      += task->last_batch_size * ctx->ctx->mcast.mtu;
@@ -331,7 +331,7 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
                                  task->cached_mkey->mr,
                                  buf,
                                  task->last_pkt_size,
-                                 packed_chunk_id.imm_data);
+                                 packed_chunk_id.imm_data, 0);
         ncomps = ib_cq_poll(ctx->cq, 1, &wc);
         ucc_assert_always(ncomps == 1);
     }

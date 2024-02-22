@@ -221,7 +221,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 status = ucc_tl_spin_prepare_mcg_rwrs(worker->rwrs[j], worker->rsges[j],
                                                       worker->grh_buf[j], worker->grh_buf_mr[j],
                                                       worker->staging_rbuf[j], worker->staging_rbuf_mr[j],
-                                                      ctx->mcast.mtu, ctx->cfg.mcast_qp_depth);
+                                                      ctx->mcast.mtu, ctx->cfg.mcast_qp_depth, j);
                 ucc_assert_always(status == UCC_OK);
                 worker->tail_idx[j] = 0;
             }
