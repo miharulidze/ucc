@@ -40,6 +40,7 @@ typedef struct ucc_tl_spin_context_config {
     int                     start_core_id;
     int                     link_bw;
     int                     timeout_scaling_param;
+    int                     n_ag_mcast_roots;
 } ucc_tl_spin_context_config_t;
 
 typedef struct ucc_tl_spin_lib {
@@ -144,8 +145,6 @@ typedef struct ucc_tl_spin_worker_info {
     uint32_t                     n_mcg;
     ucc_tl_spin_worker_signal_t *signal;
     pthread_mutex_t             *signal_mutex;
-    int                         *compls;
-    pthread_mutex_t             *compls_mutex;
     /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
 
@@ -181,6 +180,10 @@ typedef struct ucc_tl_spin_task {
     size_t                       last_pkt_size;
     size_t                       pkts_to_recv;
     double                       timeout;
+    struct {
+        int mcast_seq_starter;
+        int mcast_seq_finisher;
+    } ag;
     void                        *base_ptr;
     ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;

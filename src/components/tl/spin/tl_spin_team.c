@@ -122,15 +122,9 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
         worker->signal = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
                          &(self->tx_signal) :
                          &(self->rx_signal);
-        worker->compls = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ? 
-                         &(self->tx_compls) :
-                         &(self->rx_compls);
         worker->signal_mutex = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
                                &(self->tx_signal_mutex) :
                                &(self->rx_signal_mutex);
-        worker->compls_mutex = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
-                               &(self->tx_compls_mutex) :
-                               &(self->rx_compls_mutex);
         UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                             ucc_calloc(worker->n_mcg, sizeof(struct ibv_qp *)),
                             worker->qps, status, UCC_ERR_NO_MEMORY, ret);
@@ -141,7 +135,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                             ibv_create_cq(ctx->mcast.dev, ctx->cfg.mcast_cq_depth, NULL, NULL, 0), 
                             worker->cq, status, UCC_ERR_NO_MEMORY, ret);
         tl_debug(tl_context->lib, "worker %d created cq %p", i, worker->cq);
-        
+
         if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                                 ucc_calloc(worker->n_mcg, sizeof(struct ibv_recv_wr *)),

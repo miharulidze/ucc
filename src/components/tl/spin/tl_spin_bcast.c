@@ -44,20 +44,20 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
     tl_debug(UCC_TASK_LIB(task), "barrier 1: rank %d", team->subset.myrank);
     // ring pass 1
     if (team->subset.myrank == 0) {
-        ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
+        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
         tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, send OK");
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
         ucc_assert_always(comps == 1);
-        ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, recv OK");
     } else {
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
-        ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, recv OK", team->subset.myrank);
-        ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0); // send to right neighbor
+        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, send OK", team->subset.myrank);
@@ -65,20 +65,20 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
 
     // ring pass 2
     if (team->subset.myrank == 0) {
-        ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
+        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
         tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, send OK");
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
         ucc_assert_always(comps == 1);
-        ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, recv OK");
     } else {
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
-        ib_qp_post_recv(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, recv OK", team->subset.myrank);
-        ib_qp_rc_post_send(ctrl_ctx->qps[1], NULL, NULL, 0, 0); // send to right neighbor
+        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
         tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, send OK", team->subset.myrank);
@@ -286,6 +286,10 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
         ucc_assert_always(ncomps == 1);
     }
 
+    pthread_mutex_lock(&ctx->team->tx_compls_mutex);
+    ctx->team->tx_compls++;
+    pthread_mutex_unlock(&ctx->team->tx_compls_mutex);
+
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u finished multicasting\n", ctx->id);
 
     return UCC_OK;
@@ -357,6 +361,10 @@ repost_rwr:
     }
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u finished and exits\n", ctx->id);
+
+    pthread_mutex_lock(&ctx->team->rx_compls_mutex);
+    ctx->team->rx_compls++;
+    pthread_mutex_unlock(&ctx->team->rx_compls_mutex);
 
     return UCC_OK;
 }

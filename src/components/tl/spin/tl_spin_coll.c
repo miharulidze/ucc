@@ -68,46 +68,52 @@ poll:
     pthread_mutex_unlock(ctx->signal_mutex);
 
     switch (signal) {
-
     case (UCC_TL_SPIN_WORKER_POLL):
         completed = 0;
         goto poll;
         break;
-
     case (UCC_TL_SPIN_WORKER_START):
         if (completed) {
             goto poll;
         }
 
+        ucc_assert_always(ctx->team->cur_task != NULL);
+
         switch (ctx->type) {
-
         case (UCC_TL_SPIN_WORKER_TYPE_TX):
-            ucc_assert_always(ctx->team->cur_task->coll_type == UCC_COLL_TYPE_BCAST);
-            status = ucc_tl_spin_coll_worker_tx_bcast_start(ctx);
+            switch (ctx->team->cur_task->coll_type) {
+            case (UCC_COLL_TYPE_BCAST):
+                status = ucc_tl_spin_coll_worker_tx_bcast_start(ctx);
+                break;
+            case (UCC_COLL_TYPE_ALLGATHER):
+                status = ucc_tl_spin_coll_worker_tx_allgather_start(ctx);
+                break;
+            default:
+                ucc_assert_always(0);
+            }
             break;
-
         case (UCC_TL_SPIN_WORKER_TYPE_RX):
-            ucc_assert_always(ctx->team->cur_task->coll_type == UCC_COLL_TYPE_BCAST);
-            status = ucc_tl_spin_coll_worker_rx_bcast_start(ctx);
+            switch (ctx->team->cur_task->coll_type) {
+            case (UCC_COLL_TYPE_BCAST):
+                status = ucc_tl_spin_coll_worker_rx_bcast_start(ctx);
+                break;
+            case (UCC_COLL_TYPE_ALLGATHER):
+                status = ucc_tl_spin_coll_worker_rx_allgather_start(ctx);
+                break;
+            default:
+                ucc_assert_always(0);
+            }
             break;
-
         default:
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
             ucc_assert_always(0);
         }
-
         ucc_assert_always(status == UCC_OK);
-
         completed = 1;
-        pthread_mutex_lock(ctx->compls_mutex);
-        (*(ctx->compls))++;
-        pthread_mutex_unlock(ctx->compls_mutex);
-
         goto poll;
 
     case (UCC_TL_SPIN_WORKER_FIN):
         break;
-
     default:
         tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
         ucc_assert_always(0);

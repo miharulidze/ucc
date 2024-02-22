@@ -73,6 +73,10 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      ucc_offsetof(ucc_tl_spin_context_config_t, timeout_scaling_param),
      UCC_CONFIG_TYPE_INT},
 
+    {"ALLGATHER_MCAST_ROOTS", "2", "Number of roots simultaneously multicasting in Allgather",
+     ucc_offsetof(ucc_tl_spin_context_config_t, n_ag_mcast_roots),
+     UCC_CONFIG_TYPE_INT},
+
     {NULL}};
 
 UCC_CLASS_DEFINE_NEW_FUNC(ucc_tl_spin_context_t, ucc_base_context_t,
