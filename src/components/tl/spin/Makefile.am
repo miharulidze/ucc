@@ -14,20 +14,24 @@ mcast =                                         \
 	../mlx5/mcast/tl_mlx5_mcast_helper.h        \
 	../mlx5/mcast/tl_mlx5_mcast_helper.c
 
-sources =             \
-	tl_spin.h         \
-	tl_spin.c         \
-	tl_spin_lib.c     \
-	tl_spin_context.c \
-	tl_spin_team.c    \
-	tl_spin_coll.h    \
-	tl_spin_coll.c    \
-	tl_spin_p2p.h     \
-	tl_spin_p2p.c     \
-	tl_spin_mcast.h   \
-	tl_spin_mcast.c   \
-	tl_spin_rcache.h  \
-	tl_spin_rcache.c  \
+sources =               \
+	tl_spin.h           \
+	tl_spin.c           \
+	tl_spin_lib.c       \
+	tl_spin_context.c   \
+	tl_spin_team.c      \
+	tl_spin_coll.h      \
+	tl_spin_coll.c      \
+	tl_spin_p2p.h       \
+	tl_spin_p2p.c       \
+	tl_spin_mcast.h     \
+	tl_spin_mcast.c     \
+	tl_spin_rcache.h    \
+	tl_spin_rcache.c    \
+	tl_spin_bcast.h     \
+	tl_spin_bcast.c     \
+	tl_spin_allgather.h \
+	tl_spin_allgather.c \
 	$(mcast)
 
 module_LTLIBRARIES = libucc_tl_spin.la

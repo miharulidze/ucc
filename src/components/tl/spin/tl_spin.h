@@ -210,7 +210,7 @@ typedef struct ucc_tl_spin_team {
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
 
-#define UCC_TL_SPIN_SUPPORTED_COLLS (UCC_COLL_TYPE_BCAST)
+#define UCC_TL_SPIN_SUPPORTED_COLLS (UCC_COLL_TYPE_BCAST | UCC_COLL_TYPE_ALLGATHER)
 
 #define UCC_TL_SPIN_CTX_LIB(_ctx)                                          \
     (ctx->super.super.lib)
