@@ -172,19 +172,25 @@ typedef struct ucc_tl_spin_task {
     ucc_coll_task_t              super;
     int                          coll_type;
     uint32_t                     id;
-    size_t                       buf_size;
-    size_t                       per_thread_work;
+    size_t                       src_buf_size;
+    size_t                       dst_buf_size;
+    size_t                       start_chunk_id;
+    size_t                       inplace_start_id;
+    size_t                       inplace_end_id;
+    size_t                       tx_thread_work;
     size_t                       batch_bsize;
     size_t                       n_batches;
     size_t                       last_batch_size;
     size_t                       last_pkt_size;
+    size_t                       pkts_to_send;
     size_t                       pkts_to_recv;
-    double                       timeout;
     struct {
         int mcast_seq_starter;
         int mcast_seq_finisher;
     } ag;
-    void                        *base_ptr;
+    double                       timeout;
+    void                        *src_ptr;
+    void                        *dst_ptr;
     ucc_tl_spin_rcache_region_t *cached_mkey;
 } ucc_tl_spin_task_t;
 

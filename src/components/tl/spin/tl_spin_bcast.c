@@ -10,22 +10,20 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
     ucc_tl_spin_worker_info_t   *ctrl_ctx        = team->ctrl_ctx;
     ucc_rank_t                   root            = task->super.bargs.args.root;
     int                          reg_change_flag = 0;
-    int                          comps           = 0;
     ucc_tl_spin_rcache_region_t *cache_entry;
-    struct ibv_wc                wc[1];
 
     if (team->subset.myrank == root) {
         errno = 0;
         if (UCC_OK != ucc_rcache_get(ctx->rcache,
-                                     task->base_ptr,
-                                     task->buf_size,
+                                     task->src_ptr,
+                                     task->src_buf_size,
                                      &reg_change_flag, 
                                      (ucc_rcache_region_t **)&cache_entry)) {
             tl_error(UCC_TASK_LIB(task), "Root failed to register send buffer memory errno: %d", errno);
             return UCC_ERR_NO_RESOURCE;
         }
         task->cached_mkey = cache_entry;
-    } 
+    }
 
     // check if workers are busy
     if (team->cur_task) {
@@ -41,50 +39,7 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         pthread_mutex_unlock(&team->rx_signal_mutex);
     }
 
-    tl_debug(UCC_TASK_LIB(task), "barrier 1: rank %d", team->subset.myrank);
-    // ring pass 1
-    if (team->subset.myrank == 0) {
-        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, send OK");
-        ucc_assert_always(comps == 1);
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
-        ucc_assert_always(comps == 1);
-        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: root rank, recv OK");
-    } else {
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
-        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
-        ucc_assert_always(comps == 1);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, recv OK", team->subset.myrank);
-        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
-        ucc_assert_always(comps == 1);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 1: rank %d, send OK", team->subset.myrank);
-    }
-
-    // ring pass 2
-    if (team->subset.myrank == 0) {
-        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0);
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // send to the right neighbor completed
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, send OK");
-        ucc_assert_always(comps == 1);
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
-        ucc_assert_always(comps == 1);
-        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: root rank, recv OK");
-    } else {
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc); // recv from the left neighbor
-        ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
-        ucc_assert_always(comps == 1);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, recv OK", team->subset.myrank);
-        ib_qp_rc_post_send(ctrl_ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
-        comps = ib_cq_poll(ctrl_ctx->cq, 1, wc);
-        ucc_assert_always(comps == 1);
-        tl_debug(UCC_TASK_LIB(task), "barrier pass 2: rank %d, send OK", team->subset.myrank);
-    }
-
-    // TODO: post work/task here
+    ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, ctrl_ctx);
 
     // start workers
     if (team->subset.myrank == root) {
@@ -175,6 +130,22 @@ mpool_put:
     return UCC_OK;
 }
 
+void ucc_tl_spin_bcast_init_task_tx_info(ucc_tl_spin_task_t    *task,
+                                         ucc_tl_spin_context_t *ctx)
+{
+    task->tx_thread_work = task->src_buf_size / ctx->cfg.n_tx_workers;
+    task->batch_bsize    = ctx->mcast.mtu * ctx->cfg.mcast_tx_batch_sz;    
+    task->n_batches      = task->tx_thread_work / task->batch_bsize;
+    if (task->tx_thread_work < task->batch_bsize) {
+        ucc_assert_always(task->n_batches == 0);
+        task->last_batch_size = task->tx_thread_work / ctx->mcast.mtu;
+    } else {
+        task->last_batch_size = (task->tx_thread_work - task->batch_bsize * task->n_batches) / ctx->mcast.mtu;
+    }
+    ucc_assert_always(task->tx_thread_work >= (task->n_batches * task->batch_bsize + task->last_batch_size * ctx->mcast.mtu));
+    task->last_pkt_size = task->tx_thread_work - (task->n_batches * task->batch_bsize + task->last_batch_size * ctx->mcast.mtu);
+}
+
 ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
                                     ucc_base_coll_args_t *coll_args,
                                     ucc_tl_spin_team_t   *team)
@@ -182,52 +153,72 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
     ucc_tl_spin_context_t *ctx         = UCC_TL_SPIN_TEAM_CTX(team);
     size_t                 count       = coll_args->args.src.info.count;
     size_t                 dt_size     = ucc_dt_size(coll_args->args.src.info.datatype);
-    int                    n_workers   = ctx->cfg.n_tx_workers;
 
-    ucc_assert_always(count * dt_size >= n_workers);
-    ucc_assert_always(((count * dt_size) % n_workers) == 0);
+    ucc_assert_always(ctx->cfg.n_tx_workers == ctx->cfg.n_rx_workers);
+    ucc_assert_always(count * dt_size >= ctx->cfg.n_tx_workers);
+    ucc_assert_always(((count * dt_size) % ctx->cfg.n_tx_workers) == 0);
 
-    task->base_ptr        = coll_args->args.src.info.buffer;
-    task->buf_size        = count * dt_size;
-    task->per_thread_work = task->buf_size / n_workers;
-    task->batch_bsize     = ctx->mcast.mtu * ctx->cfg.mcast_tx_batch_sz;    
-    task->n_batches       = task->per_thread_work / task->batch_bsize;
-    if (task->per_thread_work < task->batch_bsize) {
-        ucc_assert_always(task->n_batches == 0);
-        task->last_batch_size = task->per_thread_work / ctx->mcast.mtu;
-    } else {
-        task->last_batch_size = (task->per_thread_work - task->batch_bsize * task->n_batches) / ctx->mcast.mtu;
-    }
-    ucc_assert_always(task->per_thread_work >= (task->n_batches * task->batch_bsize + task->last_batch_size * ctx->mcast.mtu));
-    task->last_pkt_size = task->per_thread_work - (task->n_batches * task->batch_bsize + task->last_batch_size * ctx->mcast.mtu);
+    task->src_ptr          = coll_args->args.src.info.buffer;
+    task->dst_ptr          = coll_args->args.src.info.buffer;
+    task->src_buf_size     = count * dt_size;
+    task->start_chunk_id   = 0;
+    task->inplace_start_id = task->inplace_end_id = SIZE_MAX;
+    ucc_tl_spin_bcast_init_task_tx_info(task, ctx);
 
-    task->pkts_to_recv = task->per_thread_work / ctx->mcast.mtu;
+    task->pkts_to_send = task->tx_thread_work / ctx->mcast.mtu;
     if (task->last_pkt_size) {
-        task->pkts_to_recv++;
+        task->pkts_to_send++;
     }
+    task->pkts_to_recv = task->pkts_to_send;
 
-    task->timeout = ((double)task->per_thread_work /
+    task->timeout = ((double)task->tx_thread_work /
                     (double)ctx->cfg.link_bw) / 
                     1000000000.0 * 
                     (double)ctx->cfg.timeout_scaling_param;
     tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "work: %zu, bw: %d, task timeout: %.16lf, scaling param: %d", 
-             task->per_thread_work, ctx->cfg.link_bw, task->timeout, ctx->cfg.timeout_scaling_param);
+             task->tx_thread_work, ctx->cfg.link_bw, task->timeout, ctx->cfg.timeout_scaling_param);
     task->super.post      = ucc_tl_spin_bcast_start;
     task->super.progress  = ucc_tl_spin_bcast_progress;
     task->super.finalize  = ucc_tl_spin_bcast_finalize;
     task->coll_type       = UCC_COLL_TYPE_BCAST;
-    tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "got new task of size: %zu buf: %p", 
-             count * dt_size, task->base_ptr);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "got new task of size: %zu src_ptr: %p", 
+             count * dt_size, task->src_ptr);
+
+    return UCC_OK;
+}
+
+inline ucc_status_t
+ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
+{
+    ucc_status_t status = ucc_tl_spin_coll_worker_tx_handler(ctx);    
+    ucc_assert_always(status == UCC_OK);
+
+    pthread_mutex_lock(&ctx->team->tx_compls_mutex);
+    ctx->team->tx_compls++;
+    pthread_mutex_unlock(&ctx->team->tx_compls_mutex);
+
+    return UCC_OK;
+}
+
+inline ucc_status_t
+ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
+{
+    ucc_status_t status = ucc_tl_spin_coll_worker_rx_handler(ctx);    
+    ucc_assert_always(status == UCC_OK);
+
+    pthread_mutex_lock(&ctx->team->rx_compls_mutex);
+    ctx->team->rx_compls++;
+    pthread_mutex_unlock(&ctx->team->rx_compls_mutex);
 
     return UCC_OK;
 }
 
 inline ucc_status_t 
-ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
+ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx)
 {
     ucc_tl_spin_task_t           *task            = ctx->team->cur_task;
-    size_t                        remaining_work  = task->per_thread_work;
-    void                         *buf             = task->base_ptr + ctx->id * task->per_thread_work;
+    size_t                        remaining_work  = task->tx_thread_work;
+    void                         *buf             = task->src_ptr + ctx->id * task->tx_thread_work;
     int                           ncomps          = 0;
     ucc_tl_spin_packed_chunk_id_t packed_chunk_id;
     int                           i;
@@ -239,10 +230,10 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u got root start signal", ctx->id);
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
             "tx worker %u got bcast task of size: %zu n_batches: %zu last_batch_size: %zu last_pkt_sz: %zu", 
-             ctx->id, task->per_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size);
+             ctx->id, task->tx_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size);
 
     packed_chunk_id.chunk_metadata.task_id  = task->id;
-    packed_chunk_id.chunk_metadata.chunk_id = 0;
+    packed_chunk_id.chunk_metadata.chunk_id = task->start_chunk_id;
 
     for (i = 0; i < task->n_batches; i++) {
         ib_qp_ud_post_mcast_send_batch(ctx->qps[0], ctx->ahs[0],
@@ -286,22 +277,18 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
         ucc_assert_always(ncomps == 1);
     }
 
-    pthread_mutex_lock(&ctx->team->tx_compls_mutex);
-    ctx->team->tx_compls++;
-    pthread_mutex_unlock(&ctx->team->tx_compls_mutex);
-
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "tx worker %u finished multicasting\n", ctx->id);
 
     return UCC_OK;
 }
 
 inline ucc_status_t
-ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
+ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx)
 {
     ucc_tl_spin_task_t           *task     = ctx->team->cur_task;
     void                         *rbuf     = ctx->staging_rbuf[0];
     size_t                       *tail_idx = &ctx->tail_idx[0];
-    void                         *buf      = task->base_ptr + ctx->id * task->per_thread_work;
+    void                         *buf      = task->dst_ptr + ctx->id * task->tx_thread_work;
     size_t                        to_recv  = task->pkts_to_recv;
     size_t                        mtu      = ctx->ctx->mcast.mtu;
     double                        timeout  = task->timeout;
@@ -314,7 +301,7 @@ ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), 
             "rx worker %u got bcast task of size: %zu n_batches: %zu last_batch_size: %zu last_pkt_sz: %zu buf: %p", 
-             ctx->id, task->per_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size, buf);
+             ctx->id, task->tx_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size, buf);
 
     t_start = ucc_get_time();
     t_end   = t_start;
@@ -325,22 +312,32 @@ ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
             ucc_assert_always(wc->byte_len > 40);
             pkt_len  = wc->byte_len - 40;
 
+            // ignore traffic from the previous iterations
             packed_chunk_id.imm_data = wc->imm_data;
             if (packed_chunk_id.chunk_metadata.task_id != task->id) {
-                tl_error(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got task id: %u, expected id: %u", 
+                tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got task id: %u, expected id: %u", 
                          packed_chunk_id.chunk_metadata.task_id, task->id);
                 goto repost_rwr;
             }
+
             chunk_id = packed_chunk_id.chunk_metadata.chunk_id;
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                      "rx worker %u got bcasted chunk of size: %zu, id: %u, tail_idx: %zu",
                      ctx->id, pkt_len, chunk_id, *tail_idx);
 
+            // ignore loopback traffic in cast of allgather
+            if ((task->inplace_start_id <= chunk_id) && (chunk_id <= task->inplace_end_id)) {
+                    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got loopback chunk id");
+                goto repost_rwr;
+            }
+
+            // ready to copy
             memcpy(buf + mtu * chunk_id, rbuf + mtu * (*tail_idx), pkt_len);
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                      "rx worker %u memcpy src: %p, dst: %p",
                      ctx->id, buf + mtu * chunk_id, rbuf + mtu * (*tail_idx));
             to_recv--;
+
 repost_rwr:
             ib_qp_post_recv_wr(ctx->qps[0], &ctx->rwrs[0][*tail_idx]);
             *tail_idx = (*tail_idx + 1) % ctx->ctx->cfg.mcast_qp_depth;
@@ -361,10 +358,6 @@ repost_rwr:
     }
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u finished and exits\n", ctx->id);
-
-    pthread_mutex_lock(&ctx->team->rx_compls_mutex);
-    ctx->team->rx_compls++;
-    pthread_mutex_unlock(&ctx->team->rx_compls_mutex);
 
     return UCC_OK;
 }

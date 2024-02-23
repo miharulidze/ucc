@@ -1,6 +1,49 @@
 #include "tl_spin_p2p.h"
 #include "tl_spin_mcast.h"
 
+ucc_status_t
+ucc_tl_spin_team_rc_ring_barrier(ucc_rank_t rank, ucc_tl_spin_worker_info_t *ctx)
+{
+    int comps;
+    struct ibv_wc wc[1];
+
+    // ring pass 1
+    if (rank == 0) {
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0);
+        comps = ib_cq_poll(ctx->cq, 1, wc); // send to the right neighbor completed
+        ucc_assert_always(comps == 1);
+        comps = ib_cq_poll(ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
+        ucc_assert_always(comps == 1);
+        ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
+    } else {
+        comps = ib_cq_poll(ctx->cq, 1, wc); // recv from the left neighbor
+        ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
+        ucc_assert_always(comps == 1);
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
+        comps = ib_cq_poll(ctx->cq, 1, wc);
+        ucc_assert_always(comps == 1);
+    }
+
+    // ring pass 2
+    if (rank == 0) {
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0);
+        comps = ib_cq_poll(ctx->cq, 1, wc); // send to the right neighbor completed
+        ucc_assert_always(comps == 1);
+        comps = ib_cq_poll(ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
+        ucc_assert_always(comps == 1);
+        ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
+    } else {
+        comps = ib_cq_poll(ctx->cq, 1, wc); // recv from the left neighbor
+        ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
+        ucc_assert_always(comps == 1);
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
+        comps = ib_cq_poll(ctx->cq, 1, wc);
+        ucc_assert_always(comps == 1);
+    }
+
+    return UCC_OK;
+}
+
 ucc_status_t 
 ucc_tl_spin_team_connect_rc_qp(ucc_base_lib_t *lib, struct ibv_qp *qp, 
                                ucc_tl_spin_qp_addr_t *local_addr,

@@ -4,6 +4,8 @@
 #include "tl_spin.h"
 
 ucc_status_t 
+ucc_tl_spin_team_rc_ring_barrier(ucc_rank_t rank, ucc_tl_spin_worker_info_t *ctx);
+ucc_status_t 
 ucc_tl_spin_team_connect_rc_qp(ucc_base_lib_t *lib, struct ibv_qp *qp, 
                                ucc_tl_spin_qp_addr_t *local_addr,
                                ucc_tl_spin_qp_addr_t *remote_addr);
