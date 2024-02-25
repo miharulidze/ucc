@@ -2,6 +2,7 @@
 #include "tl_spin_bcast.h"
 #include "tl_spin_p2p.h"
 #include "tl_spin_mcast.h"
+#include "components/mc/ucc_mc.h"
 
 static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
 {
@@ -11,6 +12,7 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
     ucc_tl_spin_worker_info_t   *ctrl_ctx        = team->ctrl_ctx;
     int                          reg_change_flag = 0;
     ucc_tl_spin_rcache_region_t *cache_entry;
+    ucc_status_t                 status;
 
     errno = 0;
     if (UCC_OK != ucc_rcache_get(ctx->rcache,
@@ -44,6 +46,17 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
     pthread_mutex_unlock(&team->tx_signal_mutex);
     team->tx_signal = UCC_TL_SPIN_WORKER_START;
     pthread_mutex_unlock(&team->tx_signal_mutex);
+
+    if (!UCC_IS_INPLACE(task->super.bargs.args)) {
+        status = ucc_mc_memcpy(PTR_OFFSET(task->dst_ptr, task->src_buf_size * UCC_TL_TEAM_RANK(team)),
+                               task->src_ptr,
+                               task->src_buf_size,
+                               task->super.bargs.args.dst.info.mem_type, 
+                               task->super.bargs.args.dst.info.mem_type);
+        if (ucc_unlikely(UCC_OK != status)) {
+            return status;
+        }
+    }
 
 enqueue:
     coll_task->status = UCC_INPROGRESS;
@@ -141,6 +154,7 @@ ucc_status_t ucc_tl_spin_allgather_init(ucc_tl_spin_task_t   *task,
     }
     task->pkts_to_recv     = task->pkts_to_send * (UCC_TL_TEAM_SIZE(team) - 1);
     task->start_chunk_id   = task->pkts_to_send * team->subset.myrank;
+
     task->inplace_start_id = task->start_chunk_id;
     task->inplace_end_id   = task->inplace_start_id + task->pkts_to_send - 1;
 
@@ -160,11 +174,11 @@ ucc_status_t ucc_tl_spin_allgather_init(ucc_tl_spin_task_t   *task,
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(team), "got new task, "
              "ag_seq_starter: %d ag_seq_finisher: %d, "
-             "to_send_bytes: %zu, ro_recv_pkts: %zu, "
-             "src_buf_size: %zu, dst_buf_size: %zu",
+             "src_buf_size: %zu, dst_buf_size: %zu "
+             "pkts_to_send: %zu, pkts_to_recv: %zu",
              task->ag.mcast_seq_starter, task->ag.mcast_seq_finisher,
-             task->tx_thread_work, task->pkts_to_recv,
-             task->src_buf_size, task->dst_buf_size);
+             task->src_buf_size, task->dst_buf_size,
+             task->pkts_to_send, task->pkts_to_recv);
 
     return UCC_OK;
 }
