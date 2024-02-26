@@ -103,6 +103,7 @@ poll:
             default:
                 ucc_assert_always(0);
             }
+            ucc_tl_spin_bitmap_cleanup(&ctx->bitmap);
             break;
         default:
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);

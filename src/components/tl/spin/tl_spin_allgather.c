@@ -41,6 +41,9 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
         ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
     }
 
+    // prepost reliability signaling
+    ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
+
     ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, ctrl_ctx);
 
     pthread_mutex_unlock(&team->tx_signal_mutex);
@@ -144,7 +147,7 @@ ucc_status_t ucc_tl_spin_allgather_init(ucc_tl_spin_task_t   *task,
     task->dst_ptr      = coll_args->args.dst.info.buffer;
     task->src_buf_size = count * dt_size / UCC_TL_TEAM_SIZE(team);
     task->dst_buf_size = count * dt_size;
-
+    ucc_assert_always(task->dst_buf_size <= ctx->cfg.max_recv_buf_size);
     ucc_assert_always(task->dst_buf_size % UCC_TL_TEAM_SIZE(team) == 0);
     ucc_tl_spin_bcast_init_task_tx_info(task, ctx);
 
@@ -206,7 +209,7 @@ ucc_tl_spin_coll_worker_tx_allgather_start(ucc_tl_spin_worker_info_t *ctx)
 
     if (((compls + 1) == ctx->ctx->cfg.n_tx_workers) && !task->ag.mcast_seq_finisher) {
         tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "sending mcast signal");
-        ib_qp_rc_post_send(ctx->team->ctrl_ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_rc_post_send(ctx->team->ctrl_ctx->qps[0], NULL, NULL, 0, 0, 0);
         compls = ib_cq_poll(ctx->team->ctrl_ctx->cq, 1, wc);
         ucc_assert_always(compls == 1);
         tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "sent mcast signal to right neighbor. is finisher: %d", task->ag.mcast_seq_finisher);
@@ -218,7 +221,11 @@ ucc_tl_spin_coll_worker_tx_allgather_start(ucc_tl_spin_worker_info_t *ctx)
 ucc_status_t
 ucc_tl_spin_coll_worker_rx_allgather_start(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_status_t status = ucc_tl_spin_coll_worker_rx_handler(ctx);    
+    ucc_status_t status;
+
+    status = ucc_tl_spin_coll_worker_rx_handler(ctx);
+    ucc_assert_always(status == UCC_OK);
+    status  = ucc_tl_spin_coll_worker_rx_reliability_handler(ctx);
     ucc_assert_always(status == UCC_OK);
 
     pthread_mutex_lock(&ctx->team->rx_compls_mutex);

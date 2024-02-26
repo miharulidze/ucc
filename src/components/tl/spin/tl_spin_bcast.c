@@ -39,6 +39,9 @@ static ucc_status_t ucc_tl_spin_bcast_start(ucc_coll_task_t *coll_task)
         pthread_mutex_unlock(&team->rx_signal_mutex);
     }
 
+    // prepost reliability signaling
+    ib_qp_post_recv(ctrl_ctx->qps[1], NULL, NULL, 0, 0);
+
     ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, ctrl_ctx);
 
     // start workers
@@ -161,6 +164,7 @@ ucc_status_t ucc_tl_spin_bcast_init(ucc_tl_spin_task_t   *task,
     task->src_ptr          = coll_args->args.src.info.buffer;
     task->dst_ptr          = coll_args->args.src.info.buffer;
     task->src_buf_size     = count * dt_size;
+    ucc_assert_always(task->src_buf_size <= ctx->cfg.max_recv_buf_size);
     task->start_chunk_id   = 0;
     task->inplace_start_id = task->inplace_end_id = SIZE_MAX;
     ucc_tl_spin_bcast_init_task_tx_info(task, ctx);
@@ -203,23 +207,26 @@ ucc_tl_spin_coll_worker_tx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
 inline ucc_status_t
 ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_status_t status = ucc_tl_spin_coll_worker_rx_handler(ctx);    
+    ucc_status_t status;
+
+    status = ucc_tl_spin_coll_worker_rx_handler(ctx);
+    ucc_assert_always(status == UCC_OK);
+    status  = ucc_tl_spin_coll_worker_rx_reliability_handler(ctx);
     ucc_assert_always(status == UCC_OK);
 
     pthread_mutex_lock(&ctx->team->rx_compls_mutex);
     ctx->team->rx_compls++;
     pthread_mutex_unlock(&ctx->team->rx_compls_mutex);
-
     return UCC_OK;
 }
 
 inline ucc_status_t 
 ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_tl_spin_task_t           *task            = ctx->team->cur_task;
-    size_t                        remaining_work  = task->tx_thread_work;
-    void                         *buf             = task->src_ptr + ctx->id * task->tx_thread_work;
-    int                           ncomps          = 0;
+    ucc_tl_spin_task_t           *task           = ctx->team->cur_task;
+    size_t                        remaining_work = task->tx_thread_work;
+    void                         *buf            = task->src_ptr + ctx->id * task->tx_thread_work;
+    int                           ncomps         = 0;
     ucc_tl_spin_packed_chunk_id_t packed_chunk_id;
     int                           i;
     struct ibv_wc                 wc;
@@ -282,38 +289,81 @@ ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx)
     return UCC_OK;
 }
 
+inline void
+ucc_tl_spin_coll_worker_rx_reliability_ln(ucc_tl_spin_worker_info_t *ctx)
+{
+    (void)ctx;
+}
+
+inline void
+ucc_tl_spin_coll_worker_rx_reliability_rn(ucc_tl_spin_worker_info_t *ctx)
+{
+    (void)ctx;
+}
+
+inline ucc_status_t
+ucc_tl_spin_coll_worker_rx_reliability_handler(ucc_tl_spin_worker_info_t *ctx)
+{
+    struct ibv_wc wc;
+    int           ncomps;
+    
+    ucc_assert_always(ctx->reliability.ln_state == UCC_TL_SPIN_RELIABILITY_PROTO_INIT);
+    ucc_assert_always(ctx->reliability.rn_state == UCC_TL_SPIN_RELIABILITY_PROTO_INIT);
+
+    return UCC_OK;
+
+    while ((ctx->reliability.ln_state != UCC_TL_SPIN_RELIABILITY_PROTO_FINISHED) || 
+           (ctx->reliability.rn_state != UCC_TL_SPIN_RELIABILITY_PROTO_FINISHED)) 
+    {
+        ncomps = ib_cq_poll(ctx->team->ctrl_ctx->cq, 1, &wc);
+        if (ncomps != 1) {
+            return UCC_ERR_NO_RESOURCE;
+        }
+        if (wc.qp_num == ctx->reliability.ln_qp->qp_num) {
+            ucc_tl_spin_coll_worker_rx_reliability_ln(ctx);
+        } else if (wc.qp_num == ctx->reliability.rn_qp->qp_num) {
+            ucc_tl_spin_coll_worker_rx_reliability_rn(ctx);
+        } else {
+            tl_error(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got wrong CQe");
+            return UCC_ERR_NO_RESOURCE;
+        }
+    }
+
+    return UCC_OK;
+}
+
 inline ucc_status_t
 ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx)
 {
-    ucc_tl_spin_task_t           *task     = ctx->team->cur_task;
-    void                         *rbuf     = ctx->staging_rbuf[0];
-    size_t                       *tail_idx = &ctx->tail_idx[0];
-    void                         *buf      = task->dst_ptr + ctx->id * task->tx_thread_work;
-    size_t                        to_recv  = task->pkts_to_recv;
-    size_t                        mtu      = ctx->ctx->mcast.mtu;
-    double                        timeout  = task->timeout;
-    uint32_t                      chunk_id = 0;
+    ucc_tl_spin_task_t           *task                = ctx->team->cur_task;
+    void                         *rbuf                = ctx->staging_rbuf[0];
+    size_t                       *tail_idx            = &ctx->tail_idx[0];
+    void                         *buf                 = task->dst_ptr + ctx->id * task->tx_thread_work;
+    size_t                        mtu                 = ctx->ctx->mcast.mtu;
+    double                        timeout             = task->timeout;
+    uint32_t                      chunk_id            = 0;
     ucc_tl_spin_packed_chunk_id_t packed_chunk_id;
     double                        t_start, t_end;
     size_t                        pkt_len;
-    struct ibv_wc                 wc[1];
+    struct ibv_wc                 wcs[2];
     int                           ncomps;
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), 
             "rx worker %u got bcast task of size: %zu n_batches: %zu last_batch_size: %zu last_pkt_sz: %zu buf: %p", 
              ctx->id, task->tx_thread_work, task->n_batches, task->last_batch_size, task->last_pkt_size, buf);
 
-    t_start = ucc_get_time();
-    t_end   = t_start;
-    while (to_recv && ((t_end - t_start) < timeout)) {
-        ncomps = ib_cq_try_poll(ctx->cq, 1, wc);
+    ctx->reliability.to_recv = task->pkts_to_recv;
+    t_start                  = ucc_get_time();
+    t_end                    = t_start;
+    while (ctx->reliability.to_recv && ((t_end - t_start) < timeout)) {
+        ncomps = ib_cq_try_poll(ctx->cq, 1, wcs);
         if (ncomps) {
             ucc_assert_always(ncomps == 1);
-            ucc_assert_always(wc->byte_len > 40);
-            pkt_len  = wc->byte_len - 40;
+            ucc_assert_always(wcs->byte_len > 40);
+            pkt_len = wcs->byte_len - 40;
 
             // ignore traffic from the previous iterations
-            packed_chunk_id.imm_data = wc->imm_data;
+            packed_chunk_id.imm_data = wcs->imm_data;
             if (packed_chunk_id.chunk_metadata.task_id != task->id) {
                 tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got task id: %u, expected id: %u", 
                          packed_chunk_id.chunk_metadata.task_id, task->id);
@@ -333,10 +383,11 @@ ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx)
 
             // ready to copy
             memcpy(buf + mtu * chunk_id, rbuf + mtu * (*tail_idx), pkt_len);
+            ucc_tl_spin_bitmap_set_bit(&ctx->bitmap, chunk_id);
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                      "rx worker %u memcpy src: %p, dst: %p",
                      ctx->id, buf + mtu * chunk_id, rbuf + mtu * (*tail_idx));
-            to_recv--;
+            ctx->reliability.to_recv--;
 
 repost_rwr:
             ib_qp_post_recv_wr(ctx->qps[0], &ctx->rwrs[0][*tail_idx]);
@@ -351,13 +402,13 @@ repost_rwr:
         ucc_assert_always(t_start <= t_end);
     }
 
-    if (to_recv) {
+    if (ctx->reliability.to_recv) {
         tl_error(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                  "rx worker %u got timed out. remaining work of %zu. last recvd chunk id: %u",
-                 ctx->id, to_recv, chunk_id);
+                 ctx->id, ctx->reliability.to_recv, chunk_id);
     }
 
-    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u finished and exits\n", ctx->id);
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u datapath finished and exits\n", ctx->id);
 
     return UCC_OK;
 }

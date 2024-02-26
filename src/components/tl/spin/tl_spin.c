@@ -77,6 +77,10 @@ static ucc_config_field_t ucc_tl_spin_context_config_table[] = {
      ucc_offsetof(ucc_tl_spin_context_config_t, n_ag_mcast_roots),
      UCC_CONFIG_TYPE_INT},
 
+    {"MAX_RECV_BUF_SIZE", "536870912", "Max receive buffer size",
+     ucc_offsetof(ucc_tl_spin_context_config_t, max_recv_buf_size),
+     UCC_CONFIG_TYPE_UINT},
+
     {NULL}};
 
 UCC_CLASS_DEFINE_NEW_FUNC(ucc_tl_spin_context_t, ucc_base_context_t,

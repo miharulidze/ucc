@@ -9,7 +9,7 @@ ucc_tl_spin_team_rc_ring_barrier(ucc_rank_t rank, ucc_tl_spin_worker_info_t *ctx
 
     // ring pass 1
     if (rank == 0) {
-        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0, 0);
         comps = ib_cq_poll(ctx->cq, 1, wc); // send to the right neighbor completed
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
@@ -19,14 +19,14 @@ ucc_tl_spin_team_rc_ring_barrier(ucc_rank_t rank, ucc_tl_spin_worker_info_t *ctx
         comps = ib_cq_poll(ctx->cq, 1, wc); // recv from the left neighbor
         ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
-        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
     }
 
     // ring pass 2
     if (rank == 0) {
-        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0);
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0, 0);
         comps = ib_cq_poll(ctx->cq, 1, wc); // send to the right neighbor completed
         ucc_assert_always(comps == 1);
         comps = ib_cq_poll(ctx->cq, 1, wc); // received data from the last rank in the ring (left neighbor)
@@ -36,7 +36,7 @@ ucc_tl_spin_team_rc_ring_barrier(ucc_rank_t rank, ucc_tl_spin_worker_info_t *ctx
         comps = ib_cq_poll(ctx->cq, 1, wc); // recv from the left neighbor
         ib_qp_post_recv(ctx->qps[1], NULL, NULL, 0, 0);
         ucc_assert_always(comps == 1);
-        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0); // send to right neighbor
+        ib_qp_rc_post_send(ctx->qps[0], NULL, NULL, 0, 0, 0); // send to right neighbor
         comps = ib_cq_poll(ctx->cq, 1, wc);
         ucc_assert_always(comps == 1);
     }
@@ -140,7 +140,8 @@ ucc_tl_spin_team_prepost_rc_qp(ucc_tl_spin_context_t *ctx,
     return UCC_OK;
 }
 
-void ib_qp_rc_post_send(struct ibv_qp *qp, struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id)
+void ib_qp_rc_post_send(struct ibv_qp *qp, struct ibv_mr *mr, void *buf, 
+                        uint32_t len, uint32_t imm_data, uint64_t id)
 {
     struct ibv_sge      sg;
     struct ibv_send_wr  wr;
@@ -154,6 +155,7 @@ void ib_qp_rc_post_send(struct ibv_qp *qp, struct ibv_mr *mr, void *buf, uint32_
     }
 
     memset(&wr, 0, sizeof(wr));
+    wr.imm_data   = imm_data;
     wr.wr_id      = id;
     wr.sg_list    = len > 0 ? &sg : NULL;
     wr.num_sge    = len > 0 ? 1   : 0;

@@ -41,6 +41,7 @@ typedef struct ucc_tl_spin_context_config {
     int                     link_bw;
     int                     timeout_scaling_param;
     int                     n_ag_mcast_roots;
+    unsigned int            max_recv_buf_size;
 } ucc_tl_spin_context_config_t;
 
 typedef struct ucc_tl_spin_lib {
@@ -122,29 +123,70 @@ typedef struct ucc_tl_spin_team ucc_tl_spin_team_t;
 
 #define UCC_TL_SPIN_IB_GRH_FOOTPRINT 64 // to make sure it is aligned
 
+typedef enum
+{
+    UCC_TL_SPIN_RELIABILITY_NO_DROPS    = 0,
+    UCC_TL_SPIN_RELIABILITY_NEED_FETCH  = 1,
+    UCC_TL_SPIN_RELIABILITY_START_FETCH = 2
+} ucc_tl_spin_reliability_pkt_type_t;
+
+typedef union ucc_tl_spin_reliability_proto_info {
+    struct {
+        uint32_t pkt_type : 3;
+        uint32_t rank_id  : 29;
+    } proto;
+    uint32_t imm_data;
+} ucc_tl_spin_reliability_proto_info_t;
+
+typedef enum {
+    UCC_TL_SPIN_RELIABILITY_PROTO_INIT     = 0,
+    UCC_TL_SPIN_RELIABILITY_PROTO_FINISHED = 1
+} ucc_tl_spin_reliability_proto_state_t;
+
+typedef struct ucc_tl_spin_reliablity_proto {
+    size_t                                to_recv;
+    ucc_tl_spin_reliability_proto_state_t ln_state;
+    ucc_tl_spin_reliability_proto_state_t rn_state;
+    struct ibv_qp                        *ln_qp;
+    struct ibv_qp                        *rn_qp;
+    ucc_rank_t                            current_rank;
+    size_t                                n_missed_ranks;
+    ucc_rank_t                           *missed_ranks;
+} ucc_tl_spin_reliablity_proto_t;
+
+typedef struct ucc_tl_spin_bitmap_descr {
+    uint64_t *buf;
+    size_t    size;
+} ucc_tl_spin_bitmap_descr_t;
+
+void ucc_tl_spin_bitmap_cleanup(ucc_tl_spin_bitmap_descr_t *bitmap);
+void ucc_tl_spin_bitmap_set_bit(ucc_tl_spin_bitmap_descr_t *bitmap, uint32_t bit_id);
+
 typedef struct ucc_tl_spin_worker_info {
-    ucc_tl_spin_context_t       *ctx;
-    ucc_tl_spin_team_t          *team;
-    ucc_tl_spin_worker_type_t    type;
-    unsigned int                 id;
-    pthread_t                    pthread;
-    struct ibv_cq               *cq;
-    struct ibv_qp              **qps;
-    struct ibv_ah              **ahs;
-    struct ibv_send_wr         **swrs;
-    struct ibv_sge             **ssges;
-    struct ibv_recv_wr         **rwrs;
-    struct ibv_sge             **rsges;
-    struct ibv_mr              **staging_rbuf_mr;
-    char                       **staging_rbuf;
-    struct ibv_mr              **grh_buf_mr;
-    char                       **grh_buf;
-    size_t                      *tail_idx;
-    size_t                       staging_rbuf_len;
-    size_t                       grh_buf_len;
-    uint32_t                     n_mcg;
-    ucc_tl_spin_worker_signal_t *signal;
-    pthread_mutex_t             *signal_mutex;
+    ucc_tl_spin_context_t         *ctx;
+    ucc_tl_spin_team_t            *team;
+    ucc_tl_spin_worker_type_t      type;
+    unsigned int                   id;
+    pthread_t                      pthread;
+    struct ibv_cq                 *cq;
+    struct ibv_qp                **qps;
+    struct ibv_ah                **ahs;
+    struct ibv_send_wr           **swrs;
+    struct ibv_sge               **ssges;
+    struct ibv_recv_wr           **rwrs;
+    struct ibv_sge               **rsges;
+    struct ibv_mr                **staging_rbuf_mr;
+    char                         **staging_rbuf;
+    struct ibv_mr                **grh_buf_mr;
+    char                         **grh_buf;
+    size_t                        *tail_idx;
+    size_t                         staging_rbuf_len;
+    size_t                         grh_buf_len;
+    ucc_tl_spin_bitmap_descr_t     bitmap;
+    ucc_tl_spin_reliablity_proto_t reliability;
+    uint32_t                       n_mcg;
+    ucc_tl_spin_worker_signal_t   *signal;
+    pthread_mutex_t               *signal_mutex;
     /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
 

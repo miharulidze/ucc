@@ -68,6 +68,60 @@ test:
     return status;
 }
 
+size_t ucc_tl_spin_get_bitmap_size(size_t buf_size, int mtu)
+{
+    size_t n_bits     = buf_size / mtu + (buf_size % mtu ? 1 : 0);
+    size_t n_uint64ts = n_bits / 64 + (n_bits % 64 ? 1 : 0);
+    return n_uint64ts * 8;
+}
+
+inline void ucc_tl_spin_bitmap_cleanup(ucc_tl_spin_bitmap_descr_t *bitmap)
+{
+    memset(bitmap->buf, 0, bitmap->size);
+}
+
+
+inline void ucc_tl_spin_bitmap_set_bit(ucc_tl_spin_bitmap_descr_t *bitmap, uint32_t bit_id)
+{
+    uint32_t arr_id     = bit_id / 64;
+    uint32_t bit_offset = bit_id % 64;
+    bitmap->buf[arr_id] |= ((uint64_t)1 << bit_offset);
+}
+
+/*
+inline void ucc_tl_spin_bitmap_get_ranks_list(ucc_tl_spin_bitmap_descr_t *bitmap,
+                                              size_t team_size,
+                                              size_t bits_per_rank,
+                                              ucc_rank_t *missed_ranks_list,
+                                              size_t *n_missed_ranks)
+{
+    size_t bitmap_offset = 0;
+    size_t i, j;
+
+    *n_missed_ranks = 0;
+    for (i = 0; i < team_size; i++) {
+        for (j = bitmap_offset, j < bitmap_offset + bits_per_rank; j++) {
+            if (!bitmap[j]) {
+                missed_ranks_list[n_missed_ranks] = i;
+                bitmap_offset += bits_per_rank;
+                (*n_missed_ranks)++;
+            }
+        }
+    }
+}
+
+inline size_t ucc_tl_spin_bitmap_get_sge(ucc_tl_spin_bitmap_descr_t *bitmap,
+                                         size_t bits_per_rank,
+                                         size_t sgl_max_size,
+                                         size_t rank_id,
+                                         size_t offset)
+{
+    // build sg list of length of up to sgl_size starting from (bits_per_rank * rank_id + offset)
+    // if sgl is full, return last scanned bit that can be used as an offset next time.
+    // if no other gaps to fetch return 0.
+}
+*/
+
 UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                     const ucc_base_team_params_t *params)
 {
@@ -219,6 +273,18 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 ucc_assert_always(status == UCC_OK);
                 worker->tail_idx[j] = 0;
             }
+            worker->bitmap.size = ucc_tl_spin_get_bitmap_size(ctx->cfg.max_recv_buf_size,  ctx->mcast.mtu);
+            tl_debug(tl_context->lib, "bitmap size is %zu\n", worker->bitmap.size);
+            if (posix_memalign((void **)&worker->bitmap.buf, 64, worker->bitmap.size)) {
+                tl_error(tl_context->lib, "allocation of bitmap buffer failed");
+                return UCC_ERR_NO_MEMORY;
+            }
+            
+            ucc_tl_spin_bitmap_cleanup(&worker->bitmap);
+            memset(&worker->reliability, 0, sizeof(worker->reliability));
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(UCC_TL_TEAM_SIZE(self), sizeof(ucc_rank_t)),
+                                worker->reliability.missed_ranks, status, UCC_ERR_NO_MEMORY, ret);
         }
     }
 
@@ -314,6 +380,8 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
                 ucc_free(worker->grh_buf);
                 ucc_free(worker->grh_buf_mr);
                 ucc_free(worker->tail_idx);
+                ucc_free(worker->bitmap.buf);
+                ucc_free(worker->reliability.missed_ranks);
             }
             mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }
@@ -555,7 +623,11 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     int                        i;
 
     // Create and connect RC QPs
-    ucc_tl_spin_team_init_p2p_qps(tl_team);
+    ucc_tl_spin_team_init_p2p_qps(tl_team); 
+    for (i = 0; i < ctx->cfg.n_rx_workers; i++) {
+        team->workers[i].reliability.ln_qp = team->ctrl_ctx->qps[0];
+        team->workers[i].reliability.rn_qp = team->ctrl_ctx->qps[1];
+    }
 
     for (i = 0; i < ctx->cfg.n_mcg; i++) {
         status = ucc_tl_spin_team_prepare_mcg(tl_team, &team->mcg_infos[i], ctx->mcast.gid++);
@@ -568,7 +640,7 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     if (status != UCC_OK) {
         return status;
     }
-    
+
     // Spawn worker threads
     ucc_tl_spin_team_spawn_workers(tl_team);
 

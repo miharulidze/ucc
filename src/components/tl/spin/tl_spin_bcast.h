@@ -16,4 +16,7 @@ ucc_status_t
 ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx);
 ucc_status_t
 ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx);
+ucc_status_t
+ucc_tl_spin_coll_worker_rx_reliability_handler(ucc_tl_spin_worker_info_t *ctx);
+
 #endif

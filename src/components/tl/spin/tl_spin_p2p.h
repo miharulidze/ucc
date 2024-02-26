@@ -16,6 +16,7 @@ ucc_status_t
 ucc_tl_spin_team_prepost_rc_qp(ucc_tl_spin_context_t *ctx,
                                ucc_tl_spin_worker_info_t *worker,
                                int qp_id);
-void ib_qp_rc_post_send(struct ibv_qp *qp, struct ibv_mr *mr, void *buf, uint32_t len, uint64_t id);
+void ib_qp_rc_post_send(struct ibv_qp *qp, struct ibv_mr *mr, void *buf, 
+                        uint32_t len, uint32_t imm_data, uint64_t id);
 
 #endif
