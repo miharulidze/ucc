@@ -5,6 +5,7 @@
 #include "tl_spin_coll.h"
 #include "tl_spin_p2p.h"
 #include "tl_spin_mcast.h"
+#include "tl_spin_bitmap.h"
 
 static ucc_status_t
 ucc_tl_spin_team_service_bcast_post(ucc_tl_spin_team_t *ctx, 
@@ -67,60 +68,6 @@ test:
 
     return status;
 }
-
-size_t ucc_tl_spin_get_bitmap_size(size_t buf_size, int mtu)
-{
-    size_t n_bits     = buf_size / mtu + (buf_size % mtu ? 1 : 0);
-    size_t n_uint64ts = n_bits / 64 + (n_bits % 64 ? 1 : 0);
-    return n_uint64ts * 8;
-}
-
-inline void ucc_tl_spin_bitmap_cleanup(ucc_tl_spin_bitmap_descr_t *bitmap)
-{
-    memset(bitmap->buf, 0, bitmap->size);
-}
-
-
-inline void ucc_tl_spin_bitmap_set_bit(ucc_tl_spin_bitmap_descr_t *bitmap, uint32_t bit_id)
-{
-    uint32_t arr_id     = bit_id / 64;
-    uint32_t bit_offset = bit_id % 64;
-    bitmap->buf[arr_id] |= ((uint64_t)1 << bit_offset);
-}
-
-/*
-inline void ucc_tl_spin_bitmap_get_ranks_list(ucc_tl_spin_bitmap_descr_t *bitmap,
-                                              size_t team_size,
-                                              size_t bits_per_rank,
-                                              ucc_rank_t *missed_ranks_list,
-                                              size_t *n_missed_ranks)
-{
-    size_t bitmap_offset = 0;
-    size_t i, j;
-
-    *n_missed_ranks = 0;
-    for (i = 0; i < team_size; i++) {
-        for (j = bitmap_offset, j < bitmap_offset + bits_per_rank; j++) {
-            if (!bitmap[j]) {
-                missed_ranks_list[n_missed_ranks] = i;
-                bitmap_offset += bits_per_rank;
-                (*n_missed_ranks)++;
-            }
-        }
-    }
-}
-
-inline size_t ucc_tl_spin_bitmap_get_sge(ucc_tl_spin_bitmap_descr_t *bitmap,
-                                         size_t bits_per_rank,
-                                         size_t sgl_max_size,
-                                         size_t rank_id,
-                                         size_t offset)
-{
-    // build sg list of length of up to sgl_size starting from (bits_per_rank * rank_id + offset)
-    // if sgl is full, return last scanned bit that can be used as an offset next time.
-    // if no other gaps to fetch return 0.
-}
-*/
 
 UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                     const ucc_base_team_params_t *params)
@@ -273,18 +220,52 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 ucc_assert_always(status == UCC_OK);
                 worker->tail_idx[j] = 0;
             }
-            worker->bitmap.size = ucc_tl_spin_get_bitmap_size(ctx->cfg.max_recv_buf_size,  ctx->mcast.mtu);
-            tl_debug(tl_context->lib, "bitmap size is %zu\n", worker->bitmap.size);
-            if (posix_memalign((void **)&worker->bitmap.buf, 64, worker->bitmap.size)) {
+
+            memset(&worker->reliability, 0, sizeof(worker->reliability));
+            worker->reliability.bitmap.size = ucc_tl_spin_get_bitmap_size(ctx->cfg.max_recv_buf_size,  ctx->mcast.mtu);
+            tl_debug(tl_context->lib, "bitmap size is %zu\n", worker->reliability.bitmap.size);
+            if (posix_memalign((void **)&worker->reliability.bitmap.buf, 64, worker->reliability.bitmap.size)) {
                 tl_error(tl_context->lib, "allocation of bitmap buffer failed");
                 return UCC_ERR_NO_MEMORY;
             }
-            
-            ucc_tl_spin_bitmap_cleanup(&worker->bitmap);
-            memset(&worker->reliability, 0, sizeof(worker->reliability));
+            ucc_tl_spin_bitmap_cleanup(&worker->reliability.bitmap);
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                                 ucc_calloc(UCC_TL_TEAM_SIZE(self), sizeof(ucc_rank_t)),
-                                worker->reliability.missed_ranks, status, UCC_ERR_NO_MEMORY, ret);
+                                worker->reliability.missing_ranks, status, UCC_ERR_NO_MEMORY, ret);
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ucc_calloc(UCC_TL_TEAM_SIZE(self), sizeof(size_t)),
+                                worker->reliability.recvd_per_rank, status, UCC_ERR_NO_MEMORY, ret);
+
+            if (posix_memalign((void **)&worker->reliability.ln_rbuf_info, 64, sizeof(ucc_tl_spin_buf_info_t))) {
+                    tl_error(tl_context->lib, "allocation of ln_rbuf_info buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+            }
+            worker->reliability.ln_rbuf_info_mr = ibv_reg_mr(ctx->p2p.pd, worker->reliability.ln_rbuf_info, 
+                                                             sizeof(ucc_tl_spin_buf_info_t),
+                                                             IBV_ACCESS_REMOTE_WRITE |
+                                                             IBV_ACCESS_LOCAL_WRITE  |
+                                                             IBV_ACCESS_REMOTE_READ);
+            if (!worker->reliability.ln_rbuf_info_mr) {
+                tl_error(tl_context->lib, "registration of ln_rbuf_info failed");
+                return UCC_ERR_NO_MEMORY;
+            }
+            if (posix_memalign((void **)&worker->reliability.rn_rbuf_info, 64, sizeof(ucc_tl_spin_buf_info_t))) {
+                    tl_error(tl_context->lib, "allocation of rn_rbuf_info buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+            }
+            worker->reliability.rn_rbuf_info_mr = ibv_reg_mr(ctx->p2p.pd, worker->reliability.rn_rbuf_info, 
+                                                             sizeof(ucc_tl_spin_buf_info_t),
+                                                             IBV_ACCESS_REMOTE_WRITE |
+                                                             IBV_ACCESS_LOCAL_WRITE  |
+                                                             IBV_ACCESS_REMOTE_READ);
+            if (!worker->reliability.rn_rbuf_info_mr) {
+                tl_error(tl_context->lib, "registration of rn_rbuf_info failed");
+                return UCC_ERR_NO_MEMORY;
+            }
+            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                                ibv_create_cq(ctx->p2p.dev, ctx->cfg.p2p_cq_depth, NULL, NULL, 0), 
+                                worker->reliability.cq,
+                                status, UCC_ERR_NO_MEMORY, ret);
         }
     }
 
@@ -380,8 +361,26 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
                 ucc_free(worker->grh_buf);
                 ucc_free(worker->grh_buf_mr);
                 ucc_free(worker->tail_idx);
-                ucc_free(worker->bitmap.buf);
-                ucc_free(worker->reliability.missed_ranks);
+                ucc_free(worker->reliability.bitmap.buf);
+                ucc_free(worker->reliability.missing_ranks);
+                ucc_free(worker->reliability.recvd_per_rank);
+                if (ibv_dereg_mr(worker->reliability.ln_rbuf_info_mr)) {
+                    tl_error(lib, "worker %d failed to destroy ln_rbuf_info_mr, errno: %d", i, errno);
+                }
+                if (ibv_dereg_mr(worker->reliability.rn_rbuf_info_mr)) {
+                    tl_error(lib, "worker %d failed to destroy ln_rbuf_info_mr, errno: %d", i, errno);
+                }
+                ucc_free(worker->reliability.ln_rbuf_info);
+                ucc_free(worker->reliability.rn_rbuf_info);
+                if (ibv_destroy_qp(worker->reliability.qps[0])) {
+                    tl_error(lib, "worker %d failed to destroy reliability qp 0, errno: %d", i, errno);
+                }
+                if (ibv_destroy_qp(worker->reliability.qps[1])) {
+                    tl_error(lib, "worker %d failed to destroy reliability qp 1, errno: %d", i, errno);
+                }
+                if (ibv_destroy_cq(worker->reliability.cq)) {
+                    tl_error(lib, "worker %d failed to reliability destroy cq, errno: %d", i, errno);
+                }
             }
             mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }
@@ -418,13 +417,12 @@ ucc_status_t ucc_tl_spin_team_destroy(ucc_base_team_t *tl_team)
 }
 
 static ucc_status_t 
-ucc_tl_spin_team_init_p2p_qps(ucc_base_team_t *tl_team)
+ucc_tl_spin_team_init_rc_qp_ring(ucc_base_team_t *tl_team, struct ibv_cq *cq, struct ibv_qp **qps, int prepost)
 {
     ucc_status_t               status      = UCC_OK;
     ucc_tl_spin_team_t        *team        = ucc_derived_of(tl_team, ucc_tl_spin_team_t);
     ucc_tl_spin_context_t     *ctx         = UCC_TL_SPIN_TEAM_CTX(team);
     ucc_base_lib_t            *lib         = UCC_TL_TEAM_LIB(team);
-    ucc_tl_spin_worker_info_t *ctrl_worker = team->ctrl_ctx;
     ucc_tl_spin_qp_addr_t     *recv_av     = NULL;
     ucc_tl_spin_qp_addr_t      send_av[2];
     ucc_rank_t                 l_neighbor, r_neighbor;
@@ -432,15 +430,13 @@ ucc_tl_spin_team_init_p2p_qps(ucc_base_team_t *tl_team)
     ucc_service_coll_req_t    *req;
     int i;
 
-    ucc_tl_spin_team_init_rc_qp_attr(&qp_init_attr, ctrl_worker->cq, 
-                                     ctx->cfg.p2p_qp_depth);
-
+    ib_qp_rc_init_attr(&qp_init_attr, cq, ctx->cfg.p2p_qp_depth);
     for (i = 0; i < 2; i++) {
         UCC_TL_SPIN_CHK_PTR(lib,
-                            ibv_create_qp(ctx->p2p.pd, &qp_init_attr), ctrl_worker->qps[i],
+                            ibv_create_qp(ctx->p2p.pd, &qp_init_attr), qps[i],
                             status, UCC_ERR_NO_RESOURCE, ret);
         send_av[i].dev_addr = ctx->p2p.dev_addr;
-        send_av[i].qpn      = ctrl_worker->qps[i]->qp_num;
+        send_av[i].qpn      = qps[i]->qp_num;
     }
 
     // Collect team address vector (e.g., rank-to-qp-address mapping)
@@ -454,8 +450,7 @@ ucc_tl_spin_team_init_p2p_qps(ucc_base_team_t *tl_team)
                                                                 sizeof(send_av),
                                                                 &req),
                         status, UCC_ERR_NO_RESOURCE, ret);
-    UCC_TL_SPIN_CHK_ERR(lib,
-                        // TODO: remove blocking behaviour
+    UCC_TL_SPIN_CHK_ERR(lib, // TODO: remove blocking behaviour
                         ucc_tl_spin_team_service_coll_test(req, 1),
                         status, UCC_ERR_NO_RESOURCE, ret);
 
@@ -463,17 +458,17 @@ ucc_tl_spin_team_init_p2p_qps(ucc_base_team_t *tl_team)
     l_neighbor = (team->subset.myrank + 1)              % team->size;
     r_neighbor = (team->subset.myrank - 1 + team->size) % team->size;
     assert(team_size == 2);
-    status = ucc_tl_spin_team_connect_rc_qp(lib, ctrl_worker->qps[0], &send_av[0],
-                                            &recv_av[l_neighbor * 2 + 1]);
+    status = ib_qp_rc_connect(lib, qps[UCC_TL_SPIN_LN_QP_ID], &send_av[0], &recv_av[l_neighbor * 2 + 1]);
     ucc_assert_always(status == UCC_OK);
-    status = ucc_tl_spin_team_prepost_rc_qp(ctx, ctrl_worker, 0);
+    status = ib_qp_rc_connect(lib, qps[UCC_TL_SPIN_RN_QP_ID], &send_av[1], &recv_av[r_neighbor * 2]);
     ucc_assert_always(status == UCC_OK);
-    status = ucc_tl_spin_team_connect_rc_qp(lib, ctrl_worker->qps[1], &send_av[1],
-                                            &recv_av[r_neighbor * 2]);
-    ucc_assert_always(status == UCC_OK);
-    status = ucc_tl_spin_team_prepost_rc_qp(ctx, ctrl_worker, 1);
-    ucc_assert_always(status == UCC_OK);
- 
+    if (prepost) {
+        status = ib_qp_rc_prepost_empty_rwrs(qps[UCC_TL_SPIN_LN_QP_ID], ctx->cfg.p2p_qp_depth);
+        ucc_assert_always(status == UCC_OK);
+        status = ib_qp_rc_prepost_empty_rwrs(qps[UCC_TL_SPIN_RN_QP_ID], ctx->cfg.p2p_qp_depth);
+        ucc_assert_always(status == UCC_OK);
+    }
+
     tl_debug(lib,
              "connected p2p context of rank %d, "
              "left neighbor rank %d (lid:qpn): %d:%d to %d:%d, "
@@ -619,14 +614,19 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     ucc_tl_spin_team_t        *team      = ucc_derived_of(tl_team, ucc_tl_spin_team_t);
     ucc_tl_spin_context_t     *ctx       = UCC_TL_SPIN_TEAM_CTX(team);
     ucc_base_lib_t            *lib       = UCC_TL_TEAM_LIB(team);
+    ucc_tl_spin_worker_info_t *worker;
     ucc_status_t               status;
     int                        i;
 
-    // Create and connect RC QPs
-    ucc_tl_spin_team_init_p2p_qps(tl_team); 
-    for (i = 0; i < ctx->cfg.n_rx_workers; i++) {
-        team->workers[i].reliability.ln_qp = team->ctrl_ctx->qps[0];
-        team->workers[i].reliability.rn_qp = team->ctrl_ctx->qps[1];
+    // Create and connect barrier ring of RC QPs
+    ucc_tl_spin_team_init_rc_qp_ring(tl_team, team->ctrl_ctx->cq, team->ctrl_ctx->qps, 1);
+    // Create syncronization rings between workers
+    for (i = 0; i < ctx->cfg.n_rx_workers + ctx->cfg.n_rx_workers; i++) {
+        worker = &team->workers[i];
+        if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
+            ucc_tl_spin_team_init_rc_qp_ring(tl_team, worker->reliability.cq, worker->reliability.qps, 0);
+            ib_qp_rc_prepare_read_swr(&team->workers[i].reliability.rd_swr, &team->workers[i].reliability.sge, 1);
+        }
     }
 
     for (i = 0; i < ctx->cfg.n_mcg; i++) {

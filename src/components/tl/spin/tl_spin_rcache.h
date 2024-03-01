@@ -3,6 +3,6 @@
 
 #include "tl_spin.h"
 
-ucc_status_t tl_spin_rcache_create(ucc_tl_spin_context_t *ctx);
+ucc_status_t tl_spin_rcache_create(struct ibv_pd *pd, ucc_rcache_t **rcache);
 
 #endif

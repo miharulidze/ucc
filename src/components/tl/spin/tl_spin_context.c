@@ -83,36 +83,22 @@ static ucc_status_t ucc_tl_spin_init_p2p_context(ucc_tl_spin_context_t *ctx)
         goto close_dev;
     }
 
-    //UCC_TL_SPIN_CHK_PTR(lib,
-    //                    ucc_calloc(UCC_TL_SPIN_GID_TBL_MAX_ENTRIES, sizeof(struct ibv_gid_entry)),
-    //                    gid_tbl_entries,
-    //                    status, UCC_ERR_NO_MEMORY, close_dev);
-    //num_gid_tbl_entries = ibv_query_gid_table(p2p_ctx->dev, gid_tbl_entries, 
-    //                                          UCC_TL_SPIN_GID_TBL_MAX_ENTRIES, 0);
-    //for (i = 0; i < num_gid_tbl_entries && !gid_found; i++) {
-    //    if (gid_tbl_entries[i].gid_type == IBV_GID_TYPE_IB) {
- 	//		p2p_ctx->dev_addr.gid_table_index = gid_tbl_entries[i].gid_index;
-	//		p2p_ctx->dev_addr.gid             = gid_tbl_entries[i].gid;
-    //        gid_found                         = 1;
-    //    }
-    //}
-    //if (!gid_found) {
-    //    status = UCC_ERR_NO_RESOURCE;
-    //    goto free_gid_tbl;
-    //}
-
     p2p_ctx->dev_addr.port_num = ctx->ib_port;
     p2p_ctx->dev_addr.mtu      = port_attr.active_mtu;
     p2p_ctx->dev_addr.lid      = port_attr.lid;
 
     UCC_TL_SPIN_CHK_PTR(lib,
                         ibv_alloc_pd(p2p_ctx->dev), p2p_ctx->pd, 
-                        status, UCC_ERR_NO_RESOURCE, free_gid_tbl);
+                        status, UCC_ERR_NO_RESOURCE, close_dev);
+
+    status = tl_spin_rcache_create(p2p_ctx->pd, &p2p_ctx->rcache);
+    if (UCC_OK != status) {
+        tl_debug(lib, "failed to create p2p rcache");
+        goto close_dev;
+    }
 
     tl_debug(lib, "p2p context setup complete: ctx %p", p2p_ctx);
 
-free_gid_tbl:
-//    ucc_free(gid_tbl_entries);
 close_dev:
     if (status != UCC_OK) {
         ibv_close_device(p2p_ctx->dev);
@@ -229,6 +215,7 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
     }
 
     mcast_ctx->mtu = active_mtu;
+    mcast_ctx->gid = 0;
 
     tl_debug(lib, "port active MTU is %d and port max MTU is %d",
              active_mtu, max_mtu);
@@ -251,18 +238,12 @@ static ucc_status_t ucc_tl_spin_init_mcast_context(ucc_tl_spin_context_t *ctx)
              device_attr.max_mcast_grp, device_attr.max_mcast_qp_attach, device_attr.max_total_mcast_qp_attach);
 
     mcast_ctx->max_qp_wr = device_attr.max_qp_wr;
-    status = ucc_mpool_init(&mcast_ctx->compl_objects_mp, 0, sizeof(ucc_tl_mlx5_mcast_p2p_completion_obj_t), 0,
-                            UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
-                            &ucc_coll_task_mpool_ops,
-                            UCC_THREAD_SINGLE,
-                            "ucc_tl_spin_mcast_p2p_completion_obj_t");
-    if (ucc_unlikely(UCC_OK != status)) {
-        tl_error(lib, "failed to initialize compl_objects_mp mpool");
-        status = UCC_ERR_NO_MEMORY;
+
+    status = tl_spin_rcache_create(mcast_ctx->pd, &mcast_ctx->rcache);
+    if (UCC_OK != status) {
+        tl_debug(lib, "failed to create mcast rcache");
         goto error;
     }
-
-    mcast_ctx->gid = 0;
 
     tl_debug(lib, "multicast context setup complete: ctx %p", mcast_ctx);
 
@@ -286,7 +267,11 @@ void ucc_tl_spin_finalize_p2p_context(ucc_tl_spin_context_t *ctx)
 {
     ucc_tl_spin_p2p_context_t *p2p_ctx = &ctx->p2p;
     ucc_base_lib_t            *lib     = ctx->super.super.lib;
-    
+
+    if (p2p_ctx->rcache) {
+        ucc_rcache_destroy(p2p_ctx->rcache);
+    }
+
     if (p2p_ctx->pd) {
         if (ibv_dealloc_pd(p2p_ctx->pd)) {
             tl_error(lib, "ibv_dealloc_pd failed errno %d", errno);
@@ -309,8 +294,8 @@ void ucc_tl_spin_finalize_mcast_context(ucc_tl_spin_context_t *ctx)
     ucc_tl_spin_mcast_context_t *mcast_ctx = &ctx->mcast;
     ucc_base_lib_t              *lib       = ctx->super.super.lib;
 
-    if (ctx->rcache) {
-        ucc_rcache_destroy(ctx->rcache);
+    if (mcast_ctx->rcache) {
+        ucc_rcache_destroy(mcast_ctx->rcache);
     }
 
     if (mcast_ctx->pd) {
@@ -337,6 +322,8 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
     UCC_CLASS_CALL_SUPER_INIT(ucc_tl_context_t, &tl_spin_config->super,
                               params->context);
     memcpy(&self->cfg, tl_spin_config, sizeof(*tl_spin_config));
+    
+    ucc_assert_always(self->cfg.n_tx_workers == 1);
 
     status = ucc_mpool_init(&self->req_mp, 0, sizeof(ucc_tl_spin_task_t), 0,
                             UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
@@ -345,12 +332,6 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
     if (status != UCC_OK) {
         tl_error(self->super.super.lib, "failed to initialize request mpool");
         return UCC_ERR_NO_MEMORY;
-    }
-
-    status = tl_spin_rcache_create(self);
-    if (UCC_OK != status) {
-        tl_debug(self->super.super.lib, "failed to create rcache");
-        goto err_rcache;
     }
 
     status = ucc_tl_spin_init_p2p_context(self);
@@ -368,7 +349,6 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
     tl_info(self->super.super.lib, "initialized tl context: %p", self);
     return UCC_OK;
 
-err_rcache:
 err_mcast:
     ucc_tl_spin_finalize_p2p_context(self);
 err_p2p:

@@ -302,7 +302,7 @@ inline void ib_qp_post_recv_wr(struct ibv_qp *qp, struct ibv_recv_wr *wr)
 {
     struct ibv_recv_wr *bad_wr;
     if (ibv_post_recv(qp, wr, &bad_wr)) {
-        ucc_debug("failed to post recv request, errno: %d", errno);
+        ucc_error("failed to post recv request, errno: %d", errno);
         return;
     }
 }
@@ -328,8 +328,8 @@ ib_qp_post_recv(struct ibv_qp *qp, struct ibv_mr *mr,
     wr.num_sge    = len ? 1 : 0;
 
     if (ibv_post_recv(qp, &wr, &bad_wr)) {
-        ucc_debug("failed to post recv request, bufsize=%d, errno: %d", len, errno);
-        return;
+        ucc_error("failed to post recv request, bufsize=%d, errno: %d", len, errno);
+        ucc_assert_always(0);
     }
 }
 
@@ -407,12 +407,12 @@ int ib_cq_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs) {
     } while (ncomp == 0);
 
     if (ncomp < 0) {
-        ucc_debug("poll_cq err=%d errno=%d", ncomp, errno);
+        ucc_error("poll_cq err=%d errno=%d", ncomp, errno);
     }
 
     for (i = 0; i < ncomp; i++) {
         if (wcs[i].status != IBV_WC_SUCCESS) {
-            ucc_debug("WCE err=%d", wcs[i].status);
+            ucc_error("WCE err=%d", wcs[i].status);
         }
     }
 
@@ -425,13 +425,13 @@ int ib_cq_try_poll(struct ibv_cq *cq, int max_batch_size, struct ibv_wc *wcs) {
     ncomp = ibv_poll_cq(cq, max_batch_size, wcs);
 
     if (ncomp < 0) {
-        ucc_debug("poll_cq err=%d errno=%d", ncomp, errno);
+        ucc_error("poll_cq err=%d errno=%d", ncomp, errno);
     }
 
     if (ncomp > 0) {
         for (i = 0; i < ncomp; i++) {
             if (wcs[i].status != IBV_WC_SUCCESS) {
-                ucc_debug("WCE err=%d", wcs[i].status);
+                ucc_error("WCE err=%d", wcs[i].status);
             }
         }
     }

@@ -32,6 +32,8 @@ sources =               \
 	tl_spin_bcast.c     \
 	tl_spin_allgather.h \
 	tl_spin_allgather.c \
+	tl_spin_bitmap.h    \
+	tl_spin_bitmap.c    \
 	$(mcast)
 
 module_LTLIBRARIES = libucc_tl_spin.la

@@ -2,6 +2,7 @@
 #include "tl_spin_coll.h"
 #include "tl_spin_bcast.h"
 #include "tl_spin_allgather.h"
+#include "tl_spin_bitmap.h"
 
 static ucc_status_t ucc_tl_spin_coll_finalize(ucc_coll_task_t *coll_task)
 {
@@ -55,10 +56,13 @@ err:
 
 void *ucc_tl_spin_coll_worker_main(void *arg)
 {
-    ucc_tl_spin_worker_info_t *ctx       = (ucc_tl_spin_worker_info_t *)arg;
-    int                        completed = 0;
-    ucc_status_t               status;
+    ucc_tl_spin_worker_info_t *ctx          = (ucc_tl_spin_worker_info_t *)arg;
+    int                        completed    = 0;
+    uint32_t                   cur_task_id  = 0;
+    uint32_t                   prev_task_id = 0;
+    int                        state_changed;
     int                        signal;
+    ucc_status_t               status;
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread started", ctx->id);
 
@@ -73,12 +77,29 @@ poll:
         goto poll;
         break;
     case (UCC_TL_SPIN_WORKER_START):
-        if (completed) {
+        state_changed = 0;
+        pthread_mutex_lock(ctx->signal_mutex);
+        if (ctx->team->cur_task == NULL) {
+            state_changed = 1;
+            ucc_assert_always(completed = 1);
+            ucc_assert_always(*(ctx->signal) != UCC_TL_SPIN_WORKER_START);
+        } else {
+            cur_task_id = ctx->team->cur_task->id;
+        }
+        pthread_mutex_unlock(ctx->signal_mutex);
+
+        if (state_changed) {
             goto poll;
         }
 
-        ucc_assert_always(ctx->team->cur_task != NULL);
+        if (completed) {
+            if (prev_task_id != cur_task_id) {
+                completed = 0;
+            }
+            goto poll;
+        }
 
+        // this is safe to dereference ctx->team->cur_task starting from here
         switch (ctx->type) {
         case (UCC_TL_SPIN_WORKER_TYPE_TX):
             switch (ctx->team->cur_task->coll_type) {
@@ -103,16 +124,20 @@ poll:
             default:
                 ucc_assert_always(0);
             }
-            ucc_tl_spin_bitmap_cleanup(&ctx->bitmap);
+            ucc_tl_spin_bitmap_cleanup(&ctx->reliability.bitmap);
+            memset(ctx->reliability.missing_ranks, 0, sizeof(ucc_rank_t) * UCC_TL_TEAM_SIZE(ctx->team));
+            memset(ctx->reliability.recvd_per_rank, 0, sizeof(size_t) * UCC_TL_TEAM_SIZE(ctx->team));
+            ctx->reliability.ln_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
+            ctx->reliability.rn_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
             break;
         default:
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
             ucc_assert_always(0);
         }
         ucc_assert_always(status == UCC_OK);
-        completed = 1;
+        completed    = 1;
+        prev_task_id = cur_task_id;
         goto poll;
-
     case (UCC_TL_SPIN_WORKER_FIN):
         break;
     default:
