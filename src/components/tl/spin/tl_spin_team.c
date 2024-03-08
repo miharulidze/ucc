@@ -100,15 +100,6 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                         self->mcg_infos,
                         status, UCC_ERR_NO_MEMORY, ret);
 
-    self->tx_signal = UCC_TL_SPIN_WORKER_POLL;
-    self->rx_signal = UCC_TL_SPIN_WORKER_POLL;
-    pthread_mutex_init(&self->tx_signal_mutex, NULL);
-    pthread_mutex_init(&self->rx_signal_mutex, NULL);
-    self->tx_compls = 0;
-    self->rx_compls = 0;
-    pthread_mutex_init(&self->tx_compls_mutex, NULL);
-    pthread_mutex_init(&self->rx_compls_mutex, NULL);
-
     // FIXME in case of error this will leak
     for (i = 0; i < n_workers; i++) {
         worker         = &self->workers[i];
@@ -120,12 +111,6 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
         worker->n_mcg = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
                          ctx->cfg.n_mcg / ctx->cfg.n_tx_workers :
                          ctx->cfg.n_mcg / ctx->cfg.n_rx_workers;
-        worker->signal = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
-                         &(self->tx_signal) :
-                         &(self->rx_signal);
-        worker->signal_mutex = worker->type == UCC_TL_SPIN_WORKER_TYPE_TX ?
-                               &(self->tx_signal_mutex) :
-                               &(self->rx_signal_mutex);
         UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                             ucc_calloc(worker->n_mcg, sizeof(struct ibv_qp *)),
                             worker->qps, status, UCC_ERR_NO_MEMORY, ret);
@@ -262,11 +247,11 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 tl_error(tl_context->lib, "registration of rn_rbuf_info failed");
                 return UCC_ERR_NO_MEMORY;
             }
-            UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                ibv_create_cq(ctx->p2p.dev, ctx->cfg.p2p_cq_depth, NULL, NULL, 0), 
-                                worker->reliability.cq,
-                                status, UCC_ERR_NO_MEMORY, ret);
         }
+        UCC_TL_SPIN_CHK_PTR(tl_context->lib,
+                            ibv_create_cq(ctx->p2p.dev, ctx->cfg.p2p_cq_depth, NULL, NULL, 0), 
+                            worker->reliability.cq,
+                            status, UCC_ERR_NO_MEMORY, ret);
     }
 
     // construct p2p worker
@@ -309,13 +294,7 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
         }
     }
 
-    pthread_mutex_lock(&self->tx_signal_mutex);
-    self->tx_signal = UCC_TL_SPIN_WORKER_FIN;
-    pthread_mutex_unlock(&self->tx_signal_mutex);
-
-    pthread_mutex_lock(&self->rx_signal_mutex);
-    self->rx_signal = UCC_TL_SPIN_WORKER_FIN;
-    pthread_mutex_unlock(&self->rx_signal_mutex);
+    ucc_tl_spin_coll_post_kill_task(self);
 
     for (i = 0; i < n_workers; i++) {
         worker = &self->workers[i];
@@ -372,15 +351,15 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
                 }
                 ucc_free(worker->reliability.ln_rbuf_info);
                 ucc_free(worker->reliability.rn_rbuf_info);
-                if (ibv_destroy_qp(worker->reliability.qps[0])) {
-                    tl_error(lib, "worker %d failed to destroy reliability qp 0, errno: %d", i, errno);
-                }
-                if (ibv_destroy_qp(worker->reliability.qps[1])) {
-                    tl_error(lib, "worker %d failed to destroy reliability qp 1, errno: %d", i, errno);
-                }
-                if (ibv_destroy_cq(worker->reliability.cq)) {
-                    tl_error(lib, "worker %d failed to reliability destroy cq, errno: %d", i, errno);
-                }
+            }
+            if (ibv_destroy_qp(worker->reliability.qps[UCC_TL_SPIN_LN_QP_ID])) {
+                tl_error(lib, "worker %d failed to destroy reliability qp 0, errno: %d", i, errno);
+            }
+            if (ibv_destroy_qp(worker->reliability.qps[UCC_TL_SPIN_RN_QP_ID])) {
+                tl_error(lib, "worker %d failed to destroy reliability qp 1, errno: %d", i, errno);
+            }
+            if (ibv_destroy_cq(worker->reliability.cq)) {
+                tl_error(lib, "worker %d failed to reliability destroy cq, errno: %d", i, errno);
             }
             mcg_id = (mcg_id + 1) % ctx->cfg.n_mcg;
         }
@@ -392,10 +371,7 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
         }
     }
 
-    pthread_mutex_destroy(&self->tx_signal_mutex);
-    pthread_mutex_destroy(&self->rx_signal_mutex);
-    pthread_mutex_destroy(&self->tx_compls_mutex);
-    pthread_mutex_destroy(&self->rx_compls_mutex);
+    ucc_tl_spin_coll_kill_task_finalize(self);
 
     ucc_free(self->workers);
 
@@ -623,8 +599,8 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     // Create syncronization rings between workers
     for (i = 0; i < ctx->cfg.n_rx_workers + ctx->cfg.n_rx_workers; i++) {
         worker = &team->workers[i];
+        ucc_tl_spin_team_init_rc_qp_ring(tl_team, worker->reliability.cq, worker->reliability.qps, 0);
         if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
-            ucc_tl_spin_team_init_rc_qp_ring(tl_team, worker->reliability.cq, worker->reliability.qps, 0);
             ib_qp_rc_prepare_read_swr(&team->workers[i].reliability.rd_swr, &team->workers[i].reliability.sge, 1);
         }
     }
@@ -641,11 +617,11 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
         return status;
     }
 
+    team->task_id = 0;
+    rbuf_init(&team->task_rbuf);
+
     // Spawn worker threads
     ucc_tl_spin_team_spawn_workers(tl_team);
-
-    team->task_id = 0;
-    team->cur_task = NULL;
 
     tl_info(lib, "initialized tl team: %p", team);
     return UCC_OK;

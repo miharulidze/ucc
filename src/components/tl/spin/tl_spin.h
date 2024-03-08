@@ -6,6 +6,7 @@
 #include "components/tl/mlx5/mcast/tl_mlx5_mcast_helper.h"
 #include "utils/ucc_rcache.h"
 #include "utils/ucc_mpool.h"
+#include "tl_spin_rbuf.h"
 
 #include <infiniband/verbs.h>
 #include <pthread.h>
@@ -205,9 +206,6 @@ typedef struct ucc_tl_spin_worker_info {
     size_t                          grh_buf_len;
     ucc_tl_spin_reliability_proto_t reliability;
     uint32_t                        n_mcg;
-    ucc_tl_spin_worker_signal_t    *signal;
-    pthread_mutex_t                *signal_mutex;
-    /* thread-local data wrt to the currently processed collective goes here */
 } ucc_tl_spin_worker_info_t;
 
 #define UCC_TL_SPIN_JOIN_MAGICNUM 0xDEADBEAF
@@ -220,7 +218,7 @@ typedef struct ucc_tl_spin_mcast_join_info {
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
-#define UCC_TL_SPIN_MAX_TASKS 16
+#define UCC_TL_SPIN_MAX_TASKS (RBUF_SIZE)
 
 typedef union ucc_tl_spin_packed_chunk_id {
     struct {
@@ -230,9 +228,18 @@ typedef union ucc_tl_spin_packed_chunk_id {
     uint32_t imm_data;
 } ucc_tl_spin_packed_chunk_id_t;
 
+typedef enum {
+    UCC_TL_SPIN_WORKER_TASK_TYPE_KILL = 0,
+    UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST = 1,
+    UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER = 3,
+} ucc_tl_spin_task_type_t;
+
 typedef struct ucc_tl_spin_task {
     ucc_coll_task_t              super;
-    int                          coll_type;
+    atomic_int                   tx_start;
+    atomic_int                   tx_compls;
+    atomic_int                   rx_compls;
+    ucc_tl_spin_task_type_t      coll_type;
     uint32_t                     id;
     size_t                       src_buf_size;
     size_t                       dst_buf_size;
@@ -270,16 +277,8 @@ typedef struct ucc_tl_spin_team {
     ucc_tl_spin_mcast_join_info_t *mcg_infos;
     ucc_tl_spin_worker_info_t     *ctrl_ctx;
     ucc_tl_spin_worker_info_t     *workers;
-    ucc_tl_spin_worker_signal_t    tx_signal;
-    ucc_tl_spin_worker_signal_t    rx_signal;
-    pthread_mutex_t                tx_signal_mutex;
-    pthread_mutex_t                rx_signal_mutex;
-    int                            tx_compls;
-    int                            rx_compls;
-    pthread_mutex_t                tx_compls_mutex;
-    pthread_mutex_t                rx_compls_mutex;
     uint32_t                       task_id;
-    ucc_tl_spin_task_t            *cur_task;
+    rbuf_t                         task_rbuf;
 } ucc_tl_spin_team_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);

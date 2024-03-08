@@ -1,18 +1,11 @@
 #include "tl_spin.h"
 #include "tl_spin_coll.h"
+#include "tl_spin_p2p.h"
+#include "tl_spin_mcast.h"
+#include "tl_spin_rbuf.h"
 #include "tl_spin_bcast.h"
 #include "tl_spin_allgather.h"
 #include "tl_spin_bitmap.h"
-
-static ucc_status_t ucc_tl_spin_coll_finalize(ucc_coll_task_t *coll_task)
-{
-    ucc_tl_spin_task_t *task = ucc_derived_of(coll_task, ucc_tl_spin_task_t);
-
-    tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", 
-             task, task->id);
-    ucc_mpool_put(task);
-    return UCC_OK;
-}
 
 ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
                                    ucc_base_team_t *tl_team,
@@ -25,8 +18,6 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
 
     task = ucc_mpool_get(&ctx->req_mp);
     ucc_coll_task_init(&task->super, coll_args, tl_team);
-
-    task->super.finalize = ucc_tl_spin_coll_finalize;
 
     switch (coll_args->args.coll_type) {
     case UCC_COLL_TYPE_BCAST:
@@ -54,96 +45,142 @@ err:
     return status;
 }
 
+inline ucc_status_t 
+ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
+{
+    ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
+    int i;
+ 
+    task->tx_start  = 0;
+    task->tx_compls = 0;
+    task->rx_compls = 0;
+    // barrier 1
+    ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
+    if (rbuf_has_space(&team->task_rbuf)) {
+        // prepost right neighbor reliability signal. Ugly.
+        for (i = 0; i < (ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers); i++) {
+            if ((task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER) &&
+                (team->workers[i].type == UCC_TL_SPIN_WORKER_TYPE_TX) && 
+                !task->ag.mcast_seq_starter) {
+                    ib_qp_post_recv(team->workers[i].reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, task->id);
+                }
+            if (team->workers[i].type == UCC_TL_SPIN_WORKER_TYPE_RX) {
+                ib_qp_post_recv(team->workers[i].reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, task->id);
+            }
+        }
+        rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
+        // rx threads might already see the task and start polling
+    } else {
+        return UCC_ERR_NO_RESOURCE;
+    }
+    // barrier 2
+    ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
+    // fire up tx threads
+    task->tx_start = 1;
+    return UCC_OK;
+}
+
+inline void 
+ucc_tl_spin_coll_progress(ucc_tl_spin_task_t *task, ucc_status_t *coll_status)
+{
+    ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
+    if ((task->tx_compls + task->rx_compls) != (ctx->cfg.n_rx_workers + ctx->cfg.n_rx_workers)) {
+        *coll_status = UCC_INPROGRESS;
+        return;
+    }
+    rbuf_pop_tail(&team->task_rbuf);
+    *coll_status = UCC_OK;
+}
+
+ucc_status_t ucc_tl_spin_coll_finalize(ucc_tl_spin_task_t *task)
+{
+    tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", task, task->id);
+    ucc_mpool_put(task);
+    return UCC_OK;
+}
+
+void ucc_tl_spin_coll_post_kill_task(ucc_tl_spin_team_t *team)
+{
+    ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
+    ucc_tl_spin_task_t    *task = ucc_mpool_get(&ctx->req_mp);
+    task->coll_type = UCC_TL_SPIN_WORKER_TASK_TYPE_KILL;
+    ucc_assert_always(rbuf_has_space(&team->task_rbuf));
+    rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
+}
+
+void ucc_tl_spin_coll_kill_task_finalize(ucc_tl_spin_team_t *team)
+{
+    int idx;
+    ucc_tl_spin_task_t *task = (ucc_tl_spin_task_t *)rbuf_get_tail_element(&team->task_rbuf, &idx);
+    ucc_assert_always((task != NULL) && (task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_KILL));
+    ucc_mpool_put(task);
+    rbuf_pop_tail(&team->task_rbuf);
+}
+
 void *ucc_tl_spin_coll_worker_main(void *arg)
 {
-    ucc_tl_spin_worker_info_t *ctx          = (ucc_tl_spin_worker_info_t *)arg;
-    int                        completed    = 0;
-    uint32_t                   cur_task_id  = 0;
-    uint32_t                   prev_task_id = 0;
-    int                        state_changed;
-    int                        signal;
+    ucc_tl_spin_worker_info_t *ctx             = (ucc_tl_spin_worker_info_t *)arg;
+    int                        got_kill_signal = 0;
+    ucc_tl_spin_task_t        *cur_task        = NULL;
+    int                        cur_task_idx    = 0;
+    int                        prev_task_idx   = INT_MAX;
     ucc_status_t               status;
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread started", ctx->id);
 
-poll:
-    pthread_mutex_lock(ctx->signal_mutex);
-    signal = *(ctx->signal);
-    pthread_mutex_unlock(ctx->signal_mutex);
-
-    switch (signal) {
-    case (UCC_TL_SPIN_WORKER_POLL):
-        completed = 0;
-        goto poll;
-        break;
-    case (UCC_TL_SPIN_WORKER_START):
-        state_changed = 0;
-        pthread_mutex_lock(ctx->signal_mutex);
-        if (ctx->team->cur_task == NULL) {
-            state_changed = 1;
-            ucc_assert_always(completed = 1);
-            ucc_assert_always(*(ctx->signal) != UCC_TL_SPIN_WORKER_START);
-        } else {
-            cur_task_id = ctx->team->cur_task->id;
+    while (1) {
+        cur_task = (ucc_tl_spin_task_t *)rbuf_get_tail_element(&ctx->team->task_rbuf, &cur_task_idx);
+        if (!cur_task) {
+            continue;
         }
-        pthread_mutex_unlock(ctx->signal_mutex);
-
-        if (state_changed) {
-            goto poll;
+        if (cur_task_idx == prev_task_idx) {
+            continue;
         }
-
-        if (completed) {
-            if (prev_task_id != cur_task_id) {
-                completed = 0;
-            }
-            goto poll;
-        }
-
-        // this is safe to dereference ctx->team->cur_task starting from here
         switch (ctx->type) {
-        case (UCC_TL_SPIN_WORKER_TYPE_TX):
-            switch (ctx->team->cur_task->coll_type) {
-            case (UCC_COLL_TYPE_BCAST):
-                status = ucc_tl_spin_coll_worker_tx_bcast_start(ctx);
+            case (UCC_TL_SPIN_WORKER_TYPE_TX):
+                switch (cur_task->coll_type) {
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST):
+                        status = ucc_tl_spin_coll_worker_tx_bcast_start(ctx, cur_task);
+                        break;
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER):
+                        status = ucc_tl_spin_coll_worker_tx_allgather_start(ctx, cur_task);
+                        break;
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_KILL):
+                        got_kill_signal = 1;
+                        status = UCC_OK;
+                        break;
+                    default:
+                        ucc_assert_always(0);
+                }
+                cur_task->tx_compls++;
                 break;
-            case (UCC_COLL_TYPE_ALLGATHER):
-                status = ucc_tl_spin_coll_worker_tx_allgather_start(ctx);
+            case (UCC_TL_SPIN_WORKER_TYPE_RX):
+                switch (cur_task->coll_type) {
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST):
+                        status = ucc_tl_spin_coll_worker_rx_bcast_start(ctx, cur_task);
+                        break;
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER):
+                        status = ucc_tl_spin_coll_worker_rx_allgather_start(ctx, cur_task);
+                        break;
+                    case (UCC_TL_SPIN_WORKER_TASK_TYPE_KILL):
+                        got_kill_signal = 1;
+                        status = UCC_OK;
+                        break;
+                    default:
+                        ucc_assert_always(0);
+                }
+                cur_task->rx_compls++;
                 break;
             default:
                 ucc_assert_always(0);
-            }
-            break;
-        case (UCC_TL_SPIN_WORKER_TYPE_RX):
-            switch (ctx->team->cur_task->coll_type) {
-            case (UCC_COLL_TYPE_BCAST):
-                status = ucc_tl_spin_coll_worker_rx_bcast_start(ctx);
-                break;
-            case (UCC_COLL_TYPE_ALLGATHER):
-                status = ucc_tl_spin_coll_worker_rx_allgather_start(ctx);
-                break;
-            default:
-                ucc_assert_always(0);
-            }
-            ucc_tl_spin_bitmap_cleanup(&ctx->reliability.bitmap);
-            memset(ctx->reliability.missing_ranks, 0, sizeof(ucc_rank_t) * UCC_TL_TEAM_SIZE(ctx->team));
-            memset(ctx->reliability.recvd_per_rank, 0, sizeof(size_t) * UCC_TL_TEAM_SIZE(ctx->team));
-            ctx->reliability.ln_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
-            ctx->reliability.rn_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
-            break;
-        default:
-            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
-            ucc_assert_always(0);
         }
         ucc_assert_always(status == UCC_OK);
-        completed    = 1;
-        prev_task_id = cur_task_id;
-        goto poll;
-    case (UCC_TL_SPIN_WORKER_FIN):
-        break;
-    default:
-        tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread shouldn't be here", ctx->id);
-        ucc_assert_always(0);
-        break;
+        if (got_kill_signal) {
+            break;
+        }
+        prev_task_idx = cur_task_idx;
     }
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "worker %u thread exits", ctx->id);
