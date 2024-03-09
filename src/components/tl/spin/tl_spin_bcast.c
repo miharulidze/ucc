@@ -288,6 +288,9 @@ ln_state_machine_entrance:
                      ctx->reliability.ln_rbuf_info->rkey);
             // fall through
         case UCC_TL_SPIN_RELIABILITY_PROTO_ISSUE_READ: // TODO: implement reads overlapping (if needed for perf)
+            if (wc->opcode == IBV_WC_SEND) {
+                break;
+            }
             if (wc->opcode != IBV_WC_RECV) {
                 ucc_assert_always(wc->opcode == IBV_WC_RDMA_READ);
                 ctx->reliability.recvd_per_rank[ctx->reliability.missing_ranks[ctx->reliability.current_rank]] += ctx->reliability.last_gap_size;
@@ -398,7 +401,7 @@ ucc_tl_spin_coll_worker_rx_reliability_rn(ucc_tl_spin_worker_info_t *ctx, ucc_tl
                     (ctx->reliability.recvd_per_rank[req.proto.rank_id] < cur_task->pkts_to_send)) {
                     ctx->reliability.cached_req = req;
                     ctx->reliability.rn_state   = UCC_TL_SPIN_RELIABILITY_PROTO_WAIT_LN_FETCH;
-                    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), 
+                    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                              "rn[%zu]: WAIT_REQ->WAIT_LN_FETCH, fetch_rank: %u, recvd_per_fetch_rank: %zu", 
                              (size_t)UCC_TL_TEAM_RANK(ctx->team), req.proto.rank_id, 
                              ctx->reliability.recvd_per_rank[req.proto.rank_id]);
