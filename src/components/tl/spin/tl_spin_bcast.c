@@ -142,6 +142,7 @@ ucc_tl_spin_coll_worker_rx_bcast_start(ucc_tl_spin_worker_info_t *ctx, ucc_tl_sp
     if (ctx->team->subset.myrank != cur_task->super.bargs.args.root) {
         status = ucc_tl_spin_coll_worker_rx_handler(ctx, cur_task);
         ucc_assert_always(status == UCC_OK);
+        ctx->reliability.recvd_per_rank[cur_task->super.bargs.args.root] = ctx->reliability.recvd_per_rank[0];
     } else {
         ctx->reliability.to_recv = 0;
     }
@@ -218,21 +219,28 @@ ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx, ucc_tl_spin_t
 
 inline void
 ucc_tl_spin_coll_worker_rx_reliability_get_missing_ranks(ucc_tl_spin_worker_info_t *ctx, 
-                                                         ucc_rank_t my_rank,
                                                          ucc_tl_spin_task_t *cur_task)
 {
     size_t i;
     ctx->reliability.n_missing_ranks = 0;
-    for (i = 0; i < UCC_TL_TEAM_SIZE(ctx->team); i++) {
-        if (i == my_rank || 
-            (cur_task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST && (i != cur_task->super.bargs.args.root))) {
-            continue;
-        }
-        if (ctx->reliability.recvd_per_rank[i] < cur_task->pkts_to_send) {
-            ctx->reliability.missing_ranks[ctx->reliability.n_missing_ranks++] = i;
-            tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "missing chunks from rank: %zu\n", i);
+
+    if (cur_task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST) {
+        ctx->reliability.missing_ranks[0] = cur_task->super.bargs.args.root;
+        ctx->reliability.n_missing_ranks                                 = 1;
+    } else {
+        for (i = 0; i < UCC_TL_TEAM_SIZE(ctx->team); i++) {
+            if (UCC_TL_TEAM_RANK(ctx->team) == i) {
+                continue;
+            }
+            if (ctx->reliability.recvd_per_rank[i] < cur_task->pkts_to_send) {
+                ctx->reliability.missing_ranks[ctx->reliability.n_missing_ranks] = i;
+                ctx->reliability.n_missing_ranks++;
+                tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rank=%zu missing chunks from rank: %zu, recvd_per_rank=%zu\n", 
+                         (size_t)UCC_TL_TEAM_RANK(ctx->team), i, ctx->reliability.recvd_per_rank[i]);
+            }
         }
     }
+    ucc_assert_always(ctx->reliability.n_missing_ranks > 0);
 }
 
 void
@@ -250,8 +258,7 @@ ln_state_machine_entrance:
                 tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "ln[%zu]: INIT->SEND_FIN", (size_t)UCC_TL_TEAM_RANK(ctx->team));
                 goto ln_state_machine_entrance;
             }
-            ucc_tl_spin_coll_worker_rx_reliability_get_missing_ranks(ctx, UCC_TL_TEAM_RANK(ctx->team), cur_task);
-            ucc_assert_always(ctx->reliability.n_missing_ranks > 0);
+            ucc_tl_spin_coll_worker_rx_reliability_get_missing_ranks(ctx, cur_task);
             ctx->reliability.current_rank = 0;
             ctx->reliability.ln_state     = UCC_TL_SPIN_RELIABILITY_PROTO_SEND_FETCH_REQ;
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), 
@@ -260,11 +267,6 @@ ln_state_machine_entrance:
             // fall through
         case UCC_TL_SPIN_RELIABILITY_PROTO_SEND_FETCH_REQ:
             ctx->reliability.current_bitmap_offset = 0;
-            ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_LN_QP_ID], // pre-post WR for ACK
-                            ctx->reliability.ln_rbuf_info_mr,
-                            ctx->reliability.ln_rbuf_info, 
-                            sizeof(ucc_tl_spin_buf_info_t), 
-                            cur_task->id);
             request.proto.pkt_type = UCC_TL_SPIN_RELIABILITY_PKT_NEED_FETCH;
             request.proto.rank_id  = ctx->reliability.missing_ranks[ctx->reliability.current_rank];
             ib_qp_rc_post_send(ctx->reliability.qps[UCC_TL_SPIN_LN_QP_ID], NULL, NULL, 0, request.imm_data, cur_task->id);
@@ -280,6 +282,11 @@ ln_state_machine_entrance:
                 break;
             }
             ucc_assert_always(wc->opcode == IBV_WC_RECV);
+            ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_LN_QP_ID], // re-post WR for ACK
+                            ctx->reliability.ln_rbuf_info_mr,
+                            ctx->reliability.ln_rbuf_info,
+                            sizeof(ucc_tl_spin_buf_info_t),
+                            0);
             ctx->reliability.ln_state = UCC_TL_SPIN_RELIABILITY_PROTO_ISSUE_READ;
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                      "ln[%zu]: WAIT_ACK->ISSUE_READ, remote buf addr: %p, rkey : %u",
@@ -297,7 +304,8 @@ ln_state_machine_entrance:
             }
             gap_size = ucc_tl_spin_bitmap_get_next_gap(&ctx->reliability.bitmap,
                                                        cur_task->pkts_to_send,
-                                                       cur_task->pkts_to_send * ctx->reliability.missing_ranks[ctx->reliability.current_rank],
+                                                       cur_task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST ?
+                                                       0 : cur_task->pkts_to_send * ctx->reliability.missing_ranks[ctx->reliability.current_rank],
                                                        ctx->reliability.current_bitmap_offset,
                                                        &gap_start_offset,
                                                        &ctx->reliability.current_bitmap_offset);
@@ -305,8 +313,11 @@ ln_state_machine_entrance:
                 ucc_assert_always(gap_size > 0);
             }
             if (gap_size) {
-                read_offset = cur_task->src_buf_size * ctx->reliability.missing_ranks[ctx->reliability.current_rank] + ctx->ctx->mcast.mtu * gap_start_offset;
-                if ((ctx->reliability.recvd_per_rank[ctx->reliability.missing_ranks[ctx->reliability.current_rank]] + gap_size == cur_task->pkts_to_send) && cur_task->last_pkt_size) {
+                read_offset = ctx->ctx->mcast.mtu * gap_start_offset;
+                if (cur_task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER) {
+                    read_offset += cur_task->src_buf_size * ctx->reliability.missing_ranks[ctx->reliability.current_rank]; 
+                }
+                if (cur_task->last_pkt_size && (ctx->reliability.recvd_per_rank[ctx->reliability.missing_ranks[ctx->reliability.current_rank]] + gap_size == cur_task->pkts_to_send)) {
                     ctx->reliability.sge.length = ctx->ctx->mcast.mtu * (gap_size - 1) + cur_task->last_pkt_size;
                 } else {
                     ctx->reliability.sge.length = ctx->ctx->mcast.mtu * gap_size;
@@ -320,11 +331,11 @@ ln_state_machine_entrance:
                 ctx->reliability.last_gap_size = gap_size;
                 tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
                          "ln[%zu]: ISSUE_READ->ISSUE_READ, rank: %zu, recvd_per_rank: %zu, "
-                         "gap_start_offset: %zu, gap_size: %zu, read_size: %u, dst_buf_size: %zu, mtu: %d",
+                         "read_offset: %zu,  gap_start_offset_within_block: %zu, gap_size: %zu, read_size: %u, dst_buf_size: %zu, mtu: %d",
                          (size_t)UCC_TL_TEAM_RANK(ctx->team),
                          (size_t)ctx->reliability.missing_ranks[ctx->reliability.current_rank],
                          (size_t)ctx->reliability.recvd_per_rank[ctx->reliability.missing_ranks[ctx->reliability.current_rank]],
-                         gap_start_offset, gap_size, ctx->reliability.sge.length, cur_task->dst_buf_size, ctx->ctx->mcast.mtu);
+                         read_offset, gap_start_offset, gap_size, ctx->reliability.sge.length, cur_task->dst_buf_size, ctx->ctx->mcast.mtu);
                 break;
             }
             if (ctx->reliability.current_rank < (ctx->reliability.n_missing_ranks - 1)) {
@@ -332,7 +343,7 @@ ln_state_machine_entrance:
                                   cur_task->pkts_to_send);
                 ctx->reliability.current_rank++;
                 ctx->reliability.ln_state = UCC_TL_SPIN_RELIABILITY_PROTO_SEND_FETCH_REQ;
-                tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "ln[%zu]: ISSUE_READ->SEND_FETCH_REQ", 
+                tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "ln[%zu]: ISSUE_READ->SEND_FETCH_REQ",
                          (size_t)UCC_TL_TEAM_RANK(ctx->team));
                 goto ln_state_machine_entrance;
             }
@@ -402,12 +413,12 @@ ucc_tl_spin_coll_worker_rx_reliability_rn(ucc_tl_spin_worker_info_t *ctx, ucc_tl
                     ctx->reliability.cached_req = req;
                     ctx->reliability.rn_state   = UCC_TL_SPIN_RELIABILITY_PROTO_WAIT_LN_FETCH;
                     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
-                             "rn[%zu]: WAIT_REQ->WAIT_LN_FETCH, fetch_rank: %u, recvd_per_fetch_rank: %zu", 
-                             (size_t)UCC_TL_TEAM_RANK(ctx->team), req.proto.rank_id, 
+                             "rn[%zu]: WAIT_REQ->WAIT_LN_FETCH, fetch_rank: %u, recvd_per_fetch_rank: %zu",
+                             (size_t)UCC_TL_TEAM_RANK(ctx->team), req.proto.rank_id,
                              ctx->reliability.recvd_per_rank[req.proto.rank_id]);
                 } else {
-                    // re-post RWR to buffer subsequent Fetch requests of Fin
-                    ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, cur_task->id);
+                    // re-post recv WR to buffer subsequent Fetch requests of Fin
+                    ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, 0);
                     ib_qp_rc_post_send(ctx->reliability.qps[UCC_TL_SPIN_RN_QP_ID],
                                        ctx->reliability.rn_rbuf_info_mr,
                                        ctx->reliability.rn_rbuf_info,
@@ -422,6 +433,7 @@ ucc_tl_spin_coll_worker_rx_reliability_rn(ucc_tl_spin_worker_info_t *ctx, ucc_tl
                 break;
             case UCC_TL_SPIN_RELIABILITY_PKT_FIN:
                 ucc_assert_always(req.proto.rank_id = 0xDEAD);
+                ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, 0); // re-post
                 ctx->reliability.rn_state = UCC_TL_SPIN_RELIABILITY_PROTO_FINALIZE;
                 tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rn[%zu]: WAIT_REQ->FINALIZE",
                          (size_t)UCC_TL_TEAM_RANK(ctx->team));
@@ -535,8 +547,11 @@ ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx, ucc_tl_spin_t
             }
 
             // ready to copy
-            rank_id         = chunk_id / cur_task->pkts_to_send;
+            rank_id = chunk_id / cur_task->pkts_to_send;
             ucc_assert_always(rank_id < UCC_TL_TEAM_SIZE(ctx->team));
+            if (cur_task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_BCAST) {
+                ucc_assert_always(rank_id == 0);
+            }
             rank_buf_offset = chunk_id % cur_task->pkts_to_send;
             memcpy(buf + cur_task->src_buf_size * rank_id + mtu * rank_buf_offset, 
                    rbuf + mtu * (*tail_idx),
@@ -560,8 +575,8 @@ repost_rwr:
 
     if (ctx->reliability.to_recv) {
         tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),
-                 "rx worker %u got timed out. remaining work of %zu. last recvd chunk id: %u",
-                 ctx->id, ctx->reliability.to_recv, chunk_id);
+                 "rx worker %u got timed out, timeout=%.10lf. remaining work of %zu. last recvd chunk id: %u",
+                 ctx->id, timeout, ctx->reliability.to_recv, chunk_id);
     }
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "rx worker %u datapath finished and exits\n", ctx->id);

@@ -112,8 +112,8 @@ ib_qp_rc_connect(ucc_base_lib_t *lib, struct ibv_qp *qp,
     attr.qp_state      = IBV_QPS_RTS;
     attr.sq_psn        = 0;
     attr.timeout       = 0;
-    attr.retry_cnt     = 7; //rnr_retry ? 7 : 0;
-    attr.rnr_retry     = 7; //rnr_retry ? 7 : 0;
+    attr.retry_cnt     = 0; //rnr_retry ? 7 : 0;
+    attr.rnr_retry     = 0; //rnr_retry ? 7 : 0;
     attr.max_rd_atomic = 16; //ok
     UCC_TL_SPIN_CHK_ERR(lib,
                         ibv_modify_qp(qp, &attr,

@@ -592,7 +592,7 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     ucc_base_lib_t            *lib       = UCC_TL_TEAM_LIB(team);
     ucc_tl_spin_worker_info_t *worker;
     ucc_status_t               status;
-    int                        i;
+    int                        i, j;
 
     // Create and connect barrier ring of RC QPs
     ucc_tl_spin_team_init_rc_qp_ring(tl_team, team->ctrl_ctx->cq, team->ctrl_ctx->qps, 1);
@@ -600,8 +600,17 @@ ucc_status_t ucc_tl_spin_team_create_test(ucc_base_team_t *tl_team)
     for (i = 0; i < ctx->cfg.n_rx_workers + ctx->cfg.n_rx_workers; i++) {
         worker = &team->workers[i];
         ucc_tl_spin_team_init_rc_qp_ring(tl_team, worker->reliability.cq, worker->reliability.qps, 0);
-        if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
-            ib_qp_rc_prepare_read_swr(&team->workers[i].reliability.rd_swr, &team->workers[i].reliability.sge, 1);
+        if (worker->type == UCC_TL_SPIN_WORKER_TYPE_TX) {
+            ib_qp_post_recv(worker->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, 0);
+        } else if (worker->type == UCC_TL_SPIN_WORKER_TYPE_RX) {
+            ib_qp_rc_prepare_read_swr(&worker->reliability.rd_swr, &team->workers[i].reliability.sge, 1);
+            for (j = 0; j < ctx->cfg.p2p_qp_depth; j++) {
+                ib_qp_post_recv(worker->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, 0);
+                ib_qp_post_recv(worker->reliability.qps[UCC_TL_SPIN_LN_QP_ID],
+                                worker->reliability.ln_rbuf_info_mr,
+                                worker->reliability.ln_rbuf_info,
+                                sizeof(ucc_tl_spin_buf_info_t), 0);
+            }
         }
     }
 

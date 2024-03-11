@@ -218,12 +218,12 @@ typedef struct ucc_tl_spin_mcast_join_info {
     unsigned int              magic_num;
 } ucc_tl_spin_mcast_join_info_t;
 
-#define UCC_TL_SPIN_MAX_TASKS (RBUF_SIZE)
+#define UCC_TL_SPIN_MAX_TASKS 256
 
 typedef union ucc_tl_spin_packed_chunk_id {
     struct {
-        uint32_t task_id  : 4;
-        uint32_t chunk_id : 28;
+        uint32_t task_id  : 8;
+        uint32_t chunk_id : 24;
     } chunk_metadata;
     uint32_t imm_data;
 } ucc_tl_spin_packed_chunk_id_t;

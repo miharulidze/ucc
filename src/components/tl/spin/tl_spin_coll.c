@@ -49,35 +49,22 @@ inline ucc_status_t
 ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
 {
     ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
-    ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
-    int i;
  
-    task->tx_start  = 0;
-    task->tx_compls = 0;
-    task->rx_compls = 0;
-    // barrier 1
-    ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
     if (rbuf_has_space(&team->task_rbuf)) {
-        // prepost right neighbor reliability signal. Ugly.
-        for (i = 0; i < (ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers); i++) {
-            if ((task->coll_type == UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER) &&
-                (team->workers[i].type == UCC_TL_SPIN_WORKER_TYPE_TX) && 
-                !task->ag.mcast_seq_starter) {
-                    ib_qp_post_recv(team->workers[i].reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, task->id);
-                }
-            if (team->workers[i].type == UCC_TL_SPIN_WORKER_TYPE_RX) {
-                ib_qp_post_recv(team->workers[i].reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, task->id);
-            }
-        }
+        task->tx_start  = 0;
+        task->tx_compls = 0;
+        task->rx_compls = 0;
+        // barrier 1
+        ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
         rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
-        // rx threads might already see the task and start polling
+        // rx threads might already see the task and start polling, thus we can do barrier 2 and fire up tx path
+        ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
+        // fire up tx threads
+        task->tx_start = 1;
     } else {
         return UCC_ERR_NO_RESOURCE;
     }
-    // barrier 2
-    ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
-    // fire up tx threads
-    task->tx_start = 1;
+
     return UCC_OK;
 }
 
@@ -86,7 +73,7 @@ ucc_tl_spin_coll_progress(ucc_tl_spin_task_t *task, ucc_status_t *coll_status)
 {
     ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
     ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
-    if ((task->tx_compls + task->rx_compls) != (ctx->cfg.n_rx_workers + ctx->cfg.n_rx_workers)) {
+    if ((task->tx_compls + task->rx_compls) != (ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers)) {
         *coll_status = UCC_INPROGRESS;
         return;
     }

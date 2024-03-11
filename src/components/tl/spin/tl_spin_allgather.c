@@ -14,6 +14,17 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
     ucc_tl_spin_rcache_region_t *cache_entry;
     ucc_status_t                 status;
 
+    if (!UCC_IS_INPLACE(task->super.bargs.args)) {
+        status = ucc_mc_memcpy(PTR_OFFSET(task->dst_ptr, task->src_buf_size * UCC_TL_TEAM_RANK(team)),
+                               task->src_ptr,
+                               task->src_buf_size,
+                               task->super.bargs.args.dst.info.mem_type, 
+                               task->super.bargs.args.dst.info.mem_type);
+        if (ucc_unlikely(UCC_OK != status)) {
+            return status;
+        }
+    }
+
     errno = 0;
     reg_changed = 0;
     if (UCC_OK != ucc_rcache_get(ctx->mcast.rcache,
@@ -41,17 +52,6 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
     status = ucc_tl_spin_coll_activate_workers(task);
     if (status != UCC_OK) {
         return status;
-    }
-
-    if (!UCC_IS_INPLACE(task->super.bargs.args)) {
-        status = ucc_mc_memcpy(PTR_OFFSET(task->dst_ptr, task->src_buf_size * UCC_TL_TEAM_RANK(team)),
-                               task->src_ptr,
-                               task->src_buf_size,
-                               task->super.bargs.args.dst.info.mem_type, 
-                               task->super.bargs.args.dst.info.mem_type);
-        if (ucc_unlikely(UCC_OK != status)) {
-            return status;
-        }
     }
 
     coll_task->status = UCC_INPROGRESS;
@@ -117,8 +117,8 @@ ucc_status_t ucc_tl_spin_allgather_init(ucc_tl_spin_task_t   *task,
     task->coll_type       = UCC_TL_SPIN_WORKER_TASK_TYPE_ALLGATHER;
 
     ucc_assert_always(ctx->cfg.n_tx_workers == ctx->cfg.n_rx_workers);
-    task->timeout = (((double)task->tx_thread_work * (UCC_TL_TEAM_SIZE(team) - 1)) /
-                    (double)ctx->cfg.link_bw) /
+    task->timeout = ((double)task->tx_thread_work * (UCC_TL_TEAM_SIZE(team))) /
+                    (double)ctx->cfg.link_bw /
                     1000000000.0 * 
                     (double)ctx->cfg.timeout_scaling_param;
 
@@ -143,6 +143,7 @@ ucc_tl_spin_coll_worker_tx_allgather_start(ucc_tl_spin_worker_info_t *ctx, ucc_t
     if (!cur_task->ag.mcast_seq_starter) {
         compls = ib_cq_poll(ctx->reliability.cq, 1, wc);
         ucc_assert_always(compls == 1 && (wc->opcode == IBV_WC_RECV));
+        ib_qp_post_recv(ctx->reliability.qps[UCC_TL_SPIN_RN_QP_ID], NULL, NULL, 0, 0); // re-post
         tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team), "got mcast signal from left neighbor");
     }
 
