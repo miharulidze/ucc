@@ -1,5 +1,6 @@
 #include "coll_score/ucc_coll_score.h"
 #include "core/ucc_service_coll.h"
+#include "core/ucc_team.h"
 
 #include "tl_spin.h"
 #include "tl_spin_coll.h"
@@ -14,7 +15,8 @@ ucc_tl_spin_team_service_bcast_post(ucc_tl_spin_team_t *ctx,
 {
     ucc_status_t            status = UCC_OK;
     ucc_team_t             *team   = ctx->base_team;
-    ucc_subset_t            subset = ctx->subset;
+    ucc_subset_t            subset = {.map    = UCC_TL_TEAM_MAP(ctx),
+                                      .myrank = UCC_TL_TEAM_RANK(ctx)};
     ucc_service_coll_req_t *req    = NULL;
 
     tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx), "bcasting");
@@ -36,7 +38,8 @@ ucc_tl_spin_team_service_allgather_post(ucc_tl_spin_team_t *ctx, void *sbuf, voi
 {
     ucc_status_t            status = UCC_OK;
     ucc_team_t             *team   = ctx->base_team;
-    ucc_subset_t            subset = ctx->subset;
+    ucc_subset_t            subset = {.map    = UCC_TL_TEAM_MAP(ctx),
+                                      .myrank = UCC_TL_TEAM_RANK(ctx)};
     ucc_service_coll_req_t *req    = NULL;
 
     status = ucc_service_allgather(team, sbuf, rbuf, size, subset, &req);
@@ -77,6 +80,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
     ucc_status_t               status    = UCC_OK;
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
     int                        i, j;
+    ucc_topo_t                *topo;
 
     // TODO: support multiple QPs/multicast subgroups per CQ
     ucc_assert_always(ctx->cfg.n_mcg == ctx->cfg.n_tx_workers);
@@ -88,8 +92,28 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
 
     self->base_team     = params->team;
     self->subset.myrank = params->rank;
-    self->subset.map    = params->map;
     self->size          = params->size;
+
+    status = ucc_ep_map_create_nested(&UCC_TL_CORE_TEAM(self)->ctx_map,
+                                      &UCC_TL_TEAM_MAP(self),
+                                      &self->subset.map);
+    if (UCC_OK != status) {
+        tl_debug(tl_context->lib, "failed to create ctx map");
+        return status;
+    }
+
+    status = ucc_topo_init(self->subset, UCC_TL_CORE_CTX(self)->topo, &topo);
+    if (UCC_OK != status) {
+        tl_error(tl_context->lib, "failed to init team topo");
+        return status;
+    }
+
+    if (ucc_topo_max_ppn(topo) > 1) {
+        tl_debug(tl_context->lib, "spin team not supported with ppn > 1, min ppn = %zu, max ppn = %zu, team size = %zu", 
+                 (size_t)ucc_topo_max_ppn(topo), (size_t)ucc_topo_max_ppn(topo), (size_t)self->size);
+        status = UCC_ERR_NOT_SUPPORTED;
+        goto cleanup;
+    }
 
     UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                         ucc_calloc(n_workers + 1, sizeof(ucc_tl_spin_worker_info_t)),
@@ -266,6 +290,9 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
 
     tl_info(tl_context->lib, "posted tl team: %p, n threads: %d", self, n_workers);
 
+cleanup:
+    ucc_topo_cleanup(topo);
+    ucc_ep_map_destroy_nested(&self->subset.map);
 ret:
     return status;
 }
