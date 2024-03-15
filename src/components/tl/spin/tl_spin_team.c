@@ -582,7 +582,6 @@ static ucc_status_t ucc_tl_spin_team_spawn_workers(ucc_base_team_t *tl_team)
     ucc_tl_spin_worker_info_t *worker    = NULL;
     ucc_status_t               status    = UCC_OK;
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
-    int                        core_id   = ctx->cfg.start_core_id;
     int                        num_cores = sysconf(_SC_NPROCESSORS_ONLN);
     int                        i;
     cpu_set_t                  cpuset;
@@ -595,17 +594,17 @@ static ucc_status_t ucc_tl_spin_team_spawn_workers(ucc_base_team_t *tl_team)
                             status, UCC_ERR_NO_RESOURCE, err);
 
         /* Round-robin workers pinning */
-        if (core_id > num_cores) {
-            core_id = ctx->cfg.start_core_id;
+        if (ctx->cur_core_id > num_cores) {
+            ctx->cur_core_id = ctx->cfg.start_core_id;
             tl_warn(lib, "number of workers is larger than number of available cores");
         }
         CPU_ZERO(&cpuset);
-        CPU_SET(core_id, &cpuset);
+        CPU_SET(ctx->cur_core_id, &cpuset);
         UCC_TL_SPIN_CHK_ERR(lib,
                             pthread_setaffinity_np(worker->pthread, sizeof(cpu_set_t), &cpuset),
                             status, UCC_ERR_NO_RESOURCE, err);
-        tl_debug(lib, "worker %d is pinned to core %d", i, core_id);
-        core_id++;
+        tl_debug(lib, "worker %d is pinned to core %zu", i, ctx->cur_core_id);
+        ctx->cur_core_id++;
     }
 
 err:

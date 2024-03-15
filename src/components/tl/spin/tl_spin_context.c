@@ -324,6 +324,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_context_t,
     memcpy(&self->cfg, tl_spin_config, sizeof(*tl_spin_config));
     
     ucc_assert_always(self->cfg.n_tx_workers == 1);
+    self->cur_core_id = self->cfg.start_core_id;
 
     status = ucc_mpool_init(&self->req_mp, 0, sizeof(ucc_tl_spin_task_t), 0,
                             UCC_CACHE_LINE_SIZE, 8, UINT_MAX,

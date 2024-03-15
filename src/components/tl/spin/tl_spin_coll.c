@@ -36,6 +36,12 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
 
     task->id = team->task_id++ % UCC_TL_SPIN_MAX_TASKS;
 
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    task->total_cycles.int64        = 0;
+    task->multicast_rx_cycles.int64 = 0;
+    task->reliability_cycles.int64  = 0;
+#endif
+
     tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", task, task->id);
     *task_h = &task->super;
     return status;
@@ -49,8 +55,11 @@ inline ucc_status_t
 ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
 {
     ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
- 
+
     if (rbuf_has_space(&team->task_rbuf)) {
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_START(task->total_cycles);
+#endif
         task->tx_start  = 0;
         task->tx_compls = 0;
         task->rx_compls = 0;
@@ -78,11 +87,29 @@ ucc_tl_spin_coll_progress(ucc_tl_spin_task_t *task, ucc_status_t *coll_status)
         return;
     }
     rbuf_pop_tail(&team->task_rbuf);
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    TSC_STOP(task->total_cycles);
+#endif
     *coll_status = UCC_OK;
 }
 
 ucc_status_t ucc_tl_spin_coll_finalize(ucc_tl_spin_task_t *task)
 {
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    ucc_tl_spin_team_t *team = UCC_TL_SPIN_TASK_TEAM(task);
+    tl_error(UCC_TASK_LIB(task),
+             "task %u statistics: "
+             "to_recv: %zu, n_drops: %zu, "
+             "total cycles per task: %llu, "
+             "total cycles in rx multicast: %llu, "
+             "total cycles in reliability: %llu",
+             task->id, 
+             task->pkts_to_recv,
+             team->workers[1].reliability.to_recv, // rx worker
+             task->total_cycles.int64, 
+             task->multicast_rx_cycles.int64,
+             task->reliability_cycles.int64);
+#endif
     tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", task, task->id);
     ucc_mpool_put(task);
     return UCC_OK;

@@ -8,6 +8,11 @@
 #include "utils/ucc_mpool.h"
 #include "tl_spin_rbuf.h"
 
+//#define UCC_TL_SPIN_PROFILE_TASK 1
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+#include "tl_spin_tsc.h"
+#endif
+
 #include <infiniband/verbs.h>
 #include <pthread.h>
 
@@ -103,6 +108,7 @@ typedef struct ucc_tl_spin_context {
     int                          ib_port;
     ucc_tl_spin_p2p_context_t    p2p;
     ucc_tl_spin_mcast_context_t  mcast;
+    size_t                       cur_core_id;
 } ucc_tl_spin_context_t;
 UCC_CLASS_DECLARE(ucc_tl_spin_context_t, const ucc_base_context_params_t *,
                   const ucc_base_config_t *);
@@ -262,6 +268,11 @@ typedef struct ucc_tl_spin_task {
     void                        *dst_ptr;
     ucc_tl_spin_rcache_region_t *cached_sbuf_mkey;
     ucc_tl_spin_rcache_region_t *cached_rbuf_mkey;
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    tsc_counter                  total_cycles;
+    tsc_counter                  multicast_rx_cycles;
+    tsc_counter                  reliability_cycles;
+#endif
 } ucc_tl_spin_task_t;
 
 #define UCC_TL_SPIN_LN_QP_ID    0
