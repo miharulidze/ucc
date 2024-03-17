@@ -8,6 +8,32 @@
 #include "tl_spin_mcast.h"
 #include "tl_spin_bitmap.h"
 
+inline ucc_status_t
+ucc_tl_spin_team_service_barrier_post(ucc_tl_spin_team_t *ctx, 
+                                      int *barrier_scratch,
+                                      ucc_service_coll_req_t **barrier_req)
+{
+    ucc_status_t            status = UCC_OK;
+    ucc_team_t             *team   = ctx->base_team;
+    ucc_subset_t            subset = {.map    = UCC_TL_TEAM_MAP(ctx),
+                                      .myrank = UCC_TL_TEAM_RANK(ctx)};
+    ucc_service_coll_req_t *req    = NULL;
+
+    tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx), "barrier");
+
+    status = ucc_service_allreduce(team, &barrier_scratch[0], &barrier_scratch[1],
+                                   UCC_DT_INT32, 1, UCC_OP_SUM, subset, &req);
+    if (ucc_unlikely(UCC_OK != status)) {
+        tl_error(UCC_TL_SPIN_TEAM_LIB(ctx), "tl service team barrier failed");
+        return status;
+    }
+
+    *barrier_req = req;
+
+    return status;
+}
+
+
 static ucc_status_t
 ucc_tl_spin_team_service_bcast_post(ucc_tl_spin_team_t *ctx, 
                                     void *buf, size_t size, ucc_rank_t root,
@@ -53,7 +79,7 @@ ucc_tl_spin_team_service_allgather_post(ucc_tl_spin_team_t *ctx, void *sbuf, voi
     return status;
 }
 
-static ucc_status_t
+ucc_status_t
 ucc_tl_spin_team_service_coll_test(ucc_service_coll_req_t *req, int blocking)
 {
     ucc_status_t status = UCC_OK;
@@ -79,6 +105,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
     ucc_tl_spin_worker_info_t *worker    = NULL;
     ucc_status_t               status    = UCC_OK;
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
+    size_t                     alignment = sysconf(_SC_PAGESIZE);
     int                        i, j;
     ucc_topo_t                *topo;
 
@@ -189,7 +216,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
             worker->staging_rbuf_len = ctx->mcast.mtu * ctx->cfg.mcast_qp_depth;
             worker->grh_buf_len      = UCC_TL_SPIN_IB_GRH_FOOTPRINT * ctx->cfg.mcast_qp_depth;
             for (j = 0; j < worker->n_mcg; j++) {
-                if (posix_memalign((void **)&worker->staging_rbuf[j], 64, worker->staging_rbuf_len)) {
+                if (posix_memalign((void **)&worker->staging_rbuf[j], alignment, worker->staging_rbuf_len)) {
                     tl_error(tl_context->lib, "allocation of staging buffer failed");
                     return UCC_ERR_NO_MEMORY;
                 }
@@ -203,7 +230,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                     return UCC_ERR_NO_MEMORY;
                 }
 
-                if (posix_memalign((void **)&worker->grh_buf[j], 64, worker->grh_buf_len)) {
+                if (posix_memalign((void **)&worker->grh_buf[j], alignment, worker->grh_buf_len)) {
                     tl_error(tl_context->lib, "allocation of ghr buffer failed");
                     return UCC_ERR_NO_MEMORY;
                 }
@@ -233,7 +260,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
             memset(&worker->reliability, 0, sizeof(worker->reliability));
             worker->reliability.bitmap.size = ucc_tl_spin_get_bitmap_size(ctx->cfg.max_recv_buf_size,  ctx->mcast.mtu);
             tl_debug(tl_context->lib, "bitmap size is %zu\n", worker->reliability.bitmap.size);
-            if (posix_memalign((void **)&worker->reliability.bitmap.buf, 64, worker->reliability.bitmap.size)) {
+            if (posix_memalign((void **)&worker->reliability.bitmap.buf, alignment, worker->reliability.bitmap.size)) {
                 tl_error(tl_context->lib, "allocation of bitmap buffer failed");
                 return UCC_ERR_NO_MEMORY;
             }
@@ -245,7 +272,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                                 ucc_calloc(UCC_TL_TEAM_SIZE(self), sizeof(size_t)),
                                 worker->reliability.recvd_per_rank, status, UCC_ERR_NO_MEMORY, ret);
 
-            if (posix_memalign((void **)&worker->reliability.ln_rbuf_info, 64, sizeof(ucc_tl_spin_buf_info_t))) {
+            if (posix_memalign((void **)&worker->reliability.ln_rbuf_info, alignment, sizeof(ucc_tl_spin_buf_info_t))) {
                     tl_error(tl_context->lib, "allocation of ln_rbuf_info buffer failed");
                     return UCC_ERR_NO_MEMORY;
             }
@@ -258,7 +285,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 tl_error(tl_context->lib, "registration of ln_rbuf_info failed");
                 return UCC_ERR_NO_MEMORY;
             }
-            if (posix_memalign((void **)&worker->reliability.rn_rbuf_info, 64, sizeof(ucc_tl_spin_buf_info_t))) {
+            if (posix_memalign((void **)&worker->reliability.rn_rbuf_info, alignment, sizeof(ucc_tl_spin_buf_info_t))) {
                     tl_error(tl_context->lib, "allocation of rn_rbuf_info buffer failed");
                     return UCC_ERR_NO_MEMORY;
             }
@@ -287,6 +314,10 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                         ibv_create_cq(ctx->p2p.dev, ctx->cfg.p2p_cq_depth, NULL, NULL, 0), 
                         self->ctrl_ctx->cq,
                         status, UCC_ERR_NO_MEMORY, ret);
+    if (posix_memalign((void **)&self->ctrl_ctx->barrier_scratch, alignment, sizeof(int) * 2)) {
+                    tl_error(tl_context->lib, "allocation of barrier scratch buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+    }
 
     tl_info(tl_context->lib, "posted tl team: %p, n threads: %d", self, n_workers);
 
@@ -304,7 +335,10 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_spin_team_t)
     int                        n_workers = ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers;
     ucc_tl_spin_worker_info_t *worker;
     int i, j, mcg_id = 0;
-    
+
+    if (self->ctrl_ctx->barrier_scratch) {
+        free(self->ctrl_ctx->barrier_scratch);
+    }
     if (self->ctrl_ctx->qps) {
         if (ibv_destroy_qp(self->ctrl_ctx->qps[0])) {
             tl_error(lib, "ctrl ctx failed to destroy qp 0, errno: %d", errno);

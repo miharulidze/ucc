@@ -54,20 +54,37 @@ err:
 inline ucc_status_t 
 ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
 {
-    ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_tl_spin_team_t     *team = UCC_TL_SPIN_TASK_TEAM(task);
+    ucc_service_coll_req_t *barrier_req;
 
     if (rbuf_has_space(&team->task_rbuf)) {
 #ifdef UCC_TL_SPIN_PROFILE_TASK
         TSC_START(task->total_cycles);
 #endif
+
         task->tx_start  = 0;
         task->tx_compls = 0;
         task->rx_compls = 0;
+ 
         // barrier 1
+#ifdef UCC_TL_SPIN_USE_SERVICE_BARRIER
+        ucc_tl_spin_team_service_barrier_post(team, team->ctrl_ctx->barrier_scratch, &barrier_req);
+        ucc_tl_spin_team_service_coll_test(barrier_req, 1);
+#else 
         ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
+#endif
+
         rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
-        // rx threads might already see the task and start polling, thus we can do barrier 2 and fire up tx path
+
+        // rx threads might already see the task and start polling
+
+#ifdef UCC_TL_SPIN_USE_SERVICE_BARRIER
+        ucc_tl_spin_team_service_barrier_post(team, team->ctrl_ctx->barrier_scratch, &barrier_req);
+        ucc_tl_spin_team_service_coll_test(barrier_req, 1);
+#else
         ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
+#endif
+
         // fire up tx threads
         task->tx_start = 1;
     } else {

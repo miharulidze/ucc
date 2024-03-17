@@ -8,7 +8,10 @@
 #include "utils/ucc_mpool.h"
 #include "tl_spin_rbuf.h"
 
+#define UCC_TL_SPIN_USE_SERVICE_BARRIER
 //#define UCC_TL_SPIN_PROFILE_TASK 1
+//#define UCC_TL_SPIN_DISABLE_MCAST 1
+
 #ifdef UCC_TL_SPIN_PROFILE_TASK
 #include "tl_spin_tsc.h"
 #endif
@@ -19,8 +22,6 @@
 #ifndef UCC_TL_SPIN_DEFAULT_SCORE
 #define UCC_TL_SPIN_DEFAULT_SCORE 42
 #endif
-
-//#define UCC_TL_SPIN_DISABLE_MCAST 1
 
 typedef struct ucc_tl_spin_iface {
     ucc_tl_iface_t super;
@@ -211,8 +212,13 @@ typedef struct ucc_tl_spin_worker_info {
     size_t                          staging_rbuf_len;
     size_t                          grh_buf_len;
     ucc_tl_spin_reliability_proto_t reliability;
+    int                            *barrier_scratch;
     uint32_t                        n_mcg;
 } ucc_tl_spin_worker_info_t;
+
+ucc_status_t ucc_tl_spin_team_service_barrier_post(ucc_tl_spin_team_t *ctx, int *barrier_scratch,
+                                                   ucc_service_coll_req_t **barrier_req);
+ucc_status_t ucc_tl_spin_team_service_coll_test(ucc_service_coll_req_t *req, int blocking);
 
 #define UCC_TL_SPIN_JOIN_MAGICNUM 0xDEADBEAF
 
