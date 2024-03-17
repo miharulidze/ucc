@@ -80,12 +80,15 @@ ucc_status_t ucc_tl_spin_allgather_init(ucc_tl_spin_task_t   *task,
                                         ucc_tl_spin_team_t   *team)
 {
     ucc_tl_spin_context_t *ctx = UCC_TL_SPIN_TEAM_CTX(team);
-    size_t                 count       = coll_args->args.dst.info.count;
-    size_t                 dt_size     = ucc_dt_size(coll_args->args.dst.info.datatype);
+    size_t                 count         = coll_args->args.dst.info.count;
+    size_t                 dt_size       = ucc_dt_size(coll_args->args.dst.info.datatype);
+    size_t                 n_mcast_roots = ctx->cfg.n_ag_mcast_roots;;
     uint64_t               seq_length;
 
-    ucc_assert_always(UCC_TL_TEAM_SIZE(team) % ctx->cfg.n_ag_mcast_roots == 0);
-    seq_length = UCC_TL_TEAM_SIZE(team) / ctx->cfg.n_ag_mcast_roots;
+    if (UCC_TL_TEAM_SIZE(team) % ctx->cfg.n_ag_mcast_roots != 0) {
+        n_mcast_roots = 1;
+    }
+    seq_length = UCC_TL_TEAM_SIZE(team) / n_mcast_roots;
 
     task->src_buf_size = count * dt_size / UCC_TL_TEAM_SIZE(team);
     task->dst_buf_size = count * dt_size;
