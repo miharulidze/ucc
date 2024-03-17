@@ -55,7 +55,9 @@ inline ucc_status_t
 ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
 {
     ucc_tl_spin_team_t     *team = UCC_TL_SPIN_TASK_TEAM(task);
+#ifdef UCC_TL_SPIN_USE_SERVICE_BARRIER
     ucc_service_coll_req_t *barrier_req;
+#endif
 
     if (rbuf_has_space(&team->task_rbuf)) {
 #ifdef UCC_TL_SPIN_PROFILE_TASK
