@@ -9,7 +9,7 @@
 #include "tl_spin_rbuf.h"
 
 #define UCC_TL_SPIN_USE_SERVICE_BARRIER
-//#define UCC_TL_SPIN_PROFILE_TASK 1
+#define UCC_TL_SPIN_PROFILE_TASK 1
 //#define UCC_TL_SPIN_DISABLE_MCAST 1
 
 #ifdef UCC_TL_SPIN_PROFILE_TASK
@@ -276,8 +276,11 @@ typedef struct ucc_tl_spin_task {
     ucc_tl_spin_rcache_region_t *cached_rbuf_mkey;
 #ifdef UCC_TL_SPIN_PROFILE_TASK
     tsc_counter                  total_cycles;
-    tsc_counter                  multicast_rx_cycles;
+    tsc_counter                  rx_cycles;
+    tsc_counter                  tx_cycles;
     tsc_counter                  reliability_cycles;
+    int                          tx_collected;
+    int                          rx_collected;
 #endif
 } ucc_tl_spin_task_t;
 

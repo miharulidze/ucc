@@ -454,6 +454,9 @@ ucc_tl_spin_coll_worker_rx_reliability_handler(ucc_tl_spin_worker_info_t *ctx, u
 {
     int           ncomps = 0;
     struct ibv_wc wc;
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    TSC_START_GLOBAL(cur_task->reliability_cycles);
+#endif
 
     ucc_assert_always(ctx->reliability.ln_state == UCC_TL_SPIN_RELIABILITY_PROTO_INIT);
     ucc_assert_always(ctx->reliability.rn_state == UCC_TL_SPIN_RELIABILITY_PROTO_INIT);
@@ -490,7 +493,9 @@ ucc_tl_spin_coll_worker_rx_reliability_handler(ucc_tl_spin_worker_info_t *ctx, u
     memset(ctx->reliability.recvd_per_rank, 0, sizeof(size_t) * UCC_TL_TEAM_SIZE(ctx->team));
     ctx->reliability.ln_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
     ctx->reliability.rn_state = UCC_TL_SPIN_RELIABILITY_PROTO_INIT;
-    
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    TSC_STOP(cur_task->reliability_cycles);
+#endif
     return UCC_OK;
 }
 

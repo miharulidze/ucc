@@ -37,9 +37,12 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
     task->id = team->task_id++ % UCC_TL_SPIN_MAX_TASKS;
 
 #ifdef UCC_TL_SPIN_PROFILE_TASK
-    task->total_cycles.int64        = 0;
-    task->multicast_rx_cycles.int64 = 0;
-    task->reliability_cycles.int64  = 0;
+    task->total_cycles.int64       = 0;
+    task->tx_cycles.int64          = 0;
+    task->rx_cycles.int64          = 0;
+    task->reliability_cycles.int64 = 0;
+    task->tx_collected             = 0;
+    task->rx_collected             = 0;
 #endif
 
     tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", task, task->id);
@@ -61,13 +64,13 @@ ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
 
     if (rbuf_has_space(&team->task_rbuf)) {
 #ifdef UCC_TL_SPIN_PROFILE_TASK
-        TSC_START(task->total_cycles);
+        TSC_START_GLOBAL(task->total_cycles);
 #endif
 
         task->tx_start  = 0;
         task->tx_compls = 0;
         task->rx_compls = 0;
- 
+
         // barrier 1
 #ifdef UCC_TL_SPIN_USE_SERVICE_BARRIER
         ucc_tl_spin_team_service_barrier_post(team, team->ctrl_ctx->barrier_scratch, &barrier_req);
@@ -76,8 +79,11 @@ ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
         ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
 #endif
 
-        rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_START_LOCAL(task->rx_cycles);
+#endif
 
+        rbuf_push_head(&team->task_rbuf, (uintptr_t)task);
         // rx threads might already see the task and start polling
 
 #ifdef UCC_TL_SPIN_USE_SERVICE_BARRIER
@@ -87,6 +93,9 @@ ucc_tl_spin_coll_activate_workers(ucc_tl_spin_task_t *task)
         ucc_tl_spin_team_rc_ring_barrier(team->subset.myrank, team->ctrl_ctx);
 #endif
 
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_START_LOCAL(task->tx_cycles);
+#endif
         // fire up tx threads
         task->tx_start = 1;
     } else {
@@ -101,6 +110,16 @@ ucc_tl_spin_coll_progress(ucc_tl_spin_task_t *task, ucc_status_t *coll_status)
 {
     ucc_tl_spin_team_t    *team = UCC_TL_SPIN_TASK_TEAM(task);
     ucc_tl_spin_context_t *ctx  = UCC_TL_SPIN_TEAM_CTX(team);
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    if (!task->tx_collected && (task->tx_compls == ctx->cfg.n_tx_workers)) {
+        TSC_STOP(task->tx_cycles);
+        task->tx_collected = 1;
+    }
+    if (!task->rx_collected && (task->rx_compls == ctx->cfg.n_rx_workers)) {
+        TSC_STOP(task->rx_cycles);
+        task->rx_collected = 1;
+    }
+#endif
     if ((task->tx_compls + task->rx_compls) != (ctx->cfg.n_tx_workers + ctx->cfg.n_rx_workers)) {
         *coll_status = UCC_INPROGRESS;
         return;
@@ -118,15 +137,17 @@ ucc_status_t ucc_tl_spin_coll_finalize(ucc_tl_spin_task_t *task)
     ucc_tl_spin_team_t *team = UCC_TL_SPIN_TASK_TEAM(task);
     tl_error(UCC_TASK_LIB(task),
              "task %u statistics: "
-             "to_recv: %zu, n_drops: %zu, "
-             "total cycles per task: %llu, "
-             "total cycles in rx multicast: %llu, "
-             "total cycles in reliability: %llu",
+             "to_recv=%zu, n_drops=%zu, "
+             "total_cycles=%llu, "
+             "tx_cycles=%llu, "
+             "rx_cycles=%llu, "
+             "reliability_cycles=%llu",
              task->id, 
              task->pkts_to_recv,
              team->workers[1].reliability.to_recv, // rx worker
-             task->total_cycles.int64, 
-             task->multicast_rx_cycles.int64,
+             task->total_cycles.int64,
+             task->tx_cycles.int64, 
+             task->rx_cycles.int64,
              task->reliability_cycles.int64);
 #endif
     tl_debug(UCC_TASK_LIB(task), "finalizing coll task ptr=%p gid=%u", task, task->id);

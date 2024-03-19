@@ -77,17 +77,21 @@
 #endif
 
 
-#define TSC_START(start) \
-{                        \
-    CPUID();             \
-    RDTSC(start);        \
+#define TSC_START_GLOBAL(start) \
+{                               \
+    CPUID();                    \
+    RDTSC(start);               \
+}
+
+#define TSC_START_LOCAL(start) \
+{                              \
+    RDTSC(start);              \
 }
 
 #define TSC_STOP(start)                                         \
 {                                                               \
 	tsc_counter tmp = start;                                    \
 	RDTSC(start);                                               \
-	CPUID();                                                    \
 	COUNTER_VAL(start) = COUNTER_VAL(start) - COUNTER_VAL(tmp); \
 }
 

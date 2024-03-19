@@ -169,22 +169,11 @@ ucc_tl_spin_coll_worker_rx_allgather_start(ucc_tl_spin_worker_info_t *ctx, ucc_t
 {
     ucc_status_t status;
 
-#ifdef UCC_TL_SPIN_PROFILE_TASK
-    TSC_START(cur_task->multicast_rx_cycles);
-#endif
     status = ucc_tl_spin_coll_worker_rx_handler(ctx, cur_task);
     ucc_assert_always(status == UCC_OK);
-#ifdef UCC_TL_SPIN_PROFILE_TASK
-    TSC_STOP(cur_task->multicast_rx_cycles);
-#endif
 
-#ifdef UCC_TL_SPIN_PROFILE_TASK
-    TSC_START(cur_task->reliability_cycles);
-#endif
     status  = ucc_tl_spin_coll_worker_rx_reliability_handler(ctx, cur_task);
     ucc_assert_always(status == UCC_OK);
-#ifdef UCC_TL_SPIN_PROFILE_TASK
-    TSC_STOP(cur_task->reliability_cycles);
-#endif
+
     return UCC_OK;
 }
