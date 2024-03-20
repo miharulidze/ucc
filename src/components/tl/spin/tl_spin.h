@@ -9,7 +9,7 @@
 #include "tl_spin_rbuf.h"
 
 #define UCC_TL_SPIN_USE_SERVICE_BARRIER
-#define UCC_TL_SPIN_PROFILE_TASK 1
+//#define UCC_TL_SPIN_PROFILE_TASK 1
 //#define UCC_TL_SPIN_DISABLE_MCAST 1
 
 #ifdef UCC_TL_SPIN_PROFILE_TASK
@@ -42,7 +42,8 @@ typedef struct ucc_tl_spin_context_config {
     int                     n_tx_workers;
     int                     n_rx_workers;
     int                     mcast_cq_depth;
-    int                     mcast_qp_depth;
+    int                     mcast_sq_depth;
+    int                     mcast_rq_depth;
     int                     mcast_tx_batch_sz;
     int                     p2p_cq_depth;
     int                     p2p_qp_depth;

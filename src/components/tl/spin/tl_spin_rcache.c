@@ -22,8 +22,8 @@ rcache_reg_mr(void *context, ucc_rcache_t *rcache, //NOLINT: rcache is unused
 
     *change_flag     = 1;
     spin_rregion->mr = ibv_reg_mr(pd, addr, length,
-                                  IBV_ACCESS_LOCAL_WRITE | 
-                                  IBV_ACCESS_REMOTE_WRITE | 
+                                  IBV_ACCESS_LOCAL_WRITE |
+                                  IBV_ACCESS_REMOTE_WRITE |
                                   IBV_ACCESS_REMOTE_READ);
     if (!spin_rregion->mr) {
         ucc_error("failed to register memory");

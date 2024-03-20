@@ -236,10 +236,10 @@ ucc_tl_spin_team_setup_mcast_qp(ucc_tl_spin_context_t *ctx,
     qp_init_attr.send_cq             = worker->cq;
     qp_init_attr.recv_cq             = worker->cq;
     qp_init_attr.sq_sig_all          = 0;
-    qp_init_attr.cap.max_send_wr     = is_tx_qp  ? ctx->cfg.mcast_qp_depth : 0;
-    qp_init_attr.cap.max_recv_wr     = !is_tx_qp ? ctx->cfg.mcast_qp_depth : 0;
+    qp_init_attr.cap.max_send_wr     = is_tx_qp  ? ctx->cfg.mcast_sq_depth : 0;
+    qp_init_attr.cap.max_recv_wr     = !is_tx_qp ? ctx->cfg.mcast_rq_depth : 0;
     //qp_init_attr.cap.max_inline_data = sr_inline;
-    qp_init_attr.cap.max_send_sge    = 2;
+    qp_init_attr.cap.max_send_sge    = 1;
     qp_init_attr.cap.max_recv_sge    = 2;
 
     worker->qps[qp_id] = ibv_create_qp(ctx->mcast.pd, &qp_init_attr);
@@ -259,7 +259,7 @@ ucc_tl_spin_team_prepost_mcast_qp(ucc_tl_spin_context_t *ctx,
     struct ibv_qp *qp       = worker->qps[qp_id];
     int            i;
 
-    for (i = 0; i < ctx->cfg.mcast_qp_depth; i++) {
+    for (i = 0; i < ctx->cfg.mcast_rq_depth; i++) {
         ib_qp_post_recv_wr(qp, &worker->rwrs[qp_id][i]);
     }
 

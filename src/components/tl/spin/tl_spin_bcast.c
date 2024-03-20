@@ -567,7 +567,7 @@ ucc_tl_spin_coll_worker_rx_handler(ucc_tl_spin_worker_info_t *ctx, ucc_tl_spin_t
 
 repost_rwr:
             ib_qp_post_recv_wr(ctx->qps[0], &ctx->rwrs[0][*tail_idx]);
-            *tail_idx = (*tail_idx + 1) % ctx->ctx->cfg.mcast_qp_depth;
+            *tail_idx = (*tail_idx + 1) % ctx->ctx->cfg.mcast_rq_depth;
             ucc_assert_always(mtu * (*tail_idx) <= ctx->staging_rbuf_len);
             
             tl_debug(UCC_TL_SPIN_TEAM_LIB(ctx->team),

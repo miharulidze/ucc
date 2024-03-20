@@ -110,6 +110,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
     ucc_topo_t                *topo;
 
     // TODO: support multiple QPs/multicast subgroups per CQ
+    ucc_assert_always(ctx->cfg.mcast_sq_depth >= ctx->cfg.mcast_tx_batch_sz);
     ucc_assert_always(ctx->cfg.n_mcg == ctx->cfg.n_tx_workers);
     ucc_assert_always(ctx->cfg.n_mcg == ctx->cfg.n_rx_workers);
     //ucc_assert_always(ctx->cfg.n_mcg % ctx->cfg.n_tx_workers == 0);
@@ -181,12 +182,14 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                                 ucc_calloc(worker->n_mcg, sizeof(struct ibv_sge *)),
                                 worker->ssges, status, UCC_ERR_NO_MEMORY, ret);
             for (j = 0; j < worker->n_mcg; j++) {
-                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                    ucc_calloc(ctx->cfg.mcast_tx_batch_sz, sizeof(struct ibv_send_wr)),
-                                    worker->swrs[j], status, UCC_ERR_NO_MEMORY, ret);
-                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                    ucc_calloc(ctx->cfg.mcast_tx_batch_sz, sizeof(struct ibv_sge)),
-                                    worker->ssges[j], status, UCC_ERR_NO_MEMORY, ret);
+                if (posix_memalign((void **)&worker->swrs[j], alignment, ctx->cfg.mcast_tx_batch_sz * sizeof(struct ibv_send_wr))) {
+                    tl_error(tl_context->lib, "allocation of swrs buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
+                if (posix_memalign((void **)&worker->ssges[j], alignment, ctx->cfg.mcast_tx_batch_sz * sizeof(struct ibv_sge))) {
+                    tl_error(tl_context->lib, "allocation of ssges buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
             }
         }
 
@@ -213,8 +216,8 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                                 ucc_calloc(worker->n_mcg, sizeof(struct ibv_sge *)),
                                 worker->rsges, status, UCC_ERR_NO_MEMORY, ret);
             
-            worker->staging_rbuf_len = ctx->mcast.mtu * ctx->cfg.mcast_qp_depth;
-            worker->grh_buf_len      = UCC_TL_SPIN_IB_GRH_FOOTPRINT * ctx->cfg.mcast_qp_depth;
+            worker->staging_rbuf_len = ctx->mcast.mtu * ctx->cfg.mcast_rq_depth;
+            worker->grh_buf_len      = UCC_TL_SPIN_IB_GRH_FOOTPRINT * ctx->cfg.mcast_rq_depth;
             for (j = 0; j < worker->n_mcg; j++) {
                 if (posix_memalign((void **)&worker->staging_rbuf[j], alignment, worker->staging_rbuf_len)) {
                     tl_error(tl_context->lib, "allocation of staging buffer failed");
@@ -243,16 +246,19 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                     tl_error(tl_context->lib, "registration of ghr buffer failed");
                     return UCC_ERR_NO_MEMORY;
                 }
-                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                    ucc_calloc(ctx->cfg.mcast_qp_depth, sizeof(struct ibv_recv_wr)),
-                                    worker->rwrs[j], status, UCC_ERR_NO_MEMORY, ret);
-                UCC_TL_SPIN_CHK_PTR(tl_context->lib,
-                                    ucc_calloc(ctx->cfg.mcast_qp_depth * 2, sizeof(struct ibv_sge)),
-                                    worker->rsges[j], status, UCC_ERR_NO_MEMORY, ret);
+                
+                if (posix_memalign((void **)&worker->rwrs[j], alignment, ctx->cfg.mcast_rq_depth * sizeof(struct ibv_recv_wr))) {
+                    tl_error(tl_context->lib, "allocation of swrs buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
+                if (posix_memalign((void **)&worker->rsges[j], alignment, ctx->cfg.mcast_rq_depth * 2 * sizeof(struct ibv_sge))) {
+                    tl_error(tl_context->lib, "allocation of ssges buffer failed");
+                    return UCC_ERR_NO_MEMORY;
+                }
                 status = ucc_tl_spin_prepare_mcg_rwrs(worker->rwrs[j], worker->rsges[j],
                                                       worker->grh_buf[j], worker->grh_buf_mr[j],
                                                       worker->staging_rbuf[j], worker->staging_rbuf_mr[j],
-                                                      ctx->mcast.mtu, ctx->cfg.mcast_qp_depth, j);
+                                                      ctx->mcast.mtu, ctx->cfg.mcast_rq_depth, j);
                 ucc_assert_always(status == UCC_OK);
                 worker->tail_idx[j] = 0;
             }
@@ -265,6 +271,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 return UCC_ERR_NO_MEMORY;
             }
             ucc_tl_spin_bitmap_cleanup(&worker->reliability.bitmap);
+
             UCC_TL_SPIN_CHK_PTR(tl_context->lib,
                                 ucc_calloc(UCC_TL_TEAM_SIZE(self), sizeof(ucc_rank_t)),
                                 worker->reliability.missing_ranks, status, UCC_ERR_NO_MEMORY, ret);
