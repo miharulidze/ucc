@@ -37,12 +37,15 @@ ucc_status_t ucc_tl_spin_coll_init(ucc_base_coll_args_t *coll_args,
     task->id = team->task_id++ % UCC_TL_SPIN_MAX_TASKS;
 
 #ifdef UCC_TL_SPIN_PROFILE_TASK
-    task->total_cycles.int64       = 0;
-    task->tx_cycles.int64          = 0;
-    task->rx_cycles.int64          = 0;
-    task->reliability_cycles.int64 = 0;
-    task->tx_collected             = 0;
-    task->rx_collected             = 0;
+    task->total_cycles.int64         = 0;
+    task->tx_cycles.int64            = 0;
+    task->rx_cycles.int64            = 0;
+    task->tx_cycles.int64            = 0;
+    task->tx_mcast_send_cycles.int64 = 0;
+    task->tx_cq_cycles.int64         = 0;
+    task->reliability_cycles.int64   = 0;
+    task->tx_collected               = 0;
+    task->rx_collected               = 0;
 #endif
 
     tl_debug(UCC_TASK_LIB(task), "init coll task ptr=%p tgid=%u", task, task->id);
@@ -140,13 +143,19 @@ ucc_status_t ucc_tl_spin_coll_finalize(ucc_tl_spin_task_t *task)
              "to_recv=%zu, n_drops=%zu, "
              "total_cycles=%llu, "
              "tx_cycles=%llu, "
+             "tx_mcast_send_cycles=%llu, "
+             "tx_cq_cycles=%llu, "
+             "tx_loop=%llu, "
              "rx_cycles=%llu, "
              "reliability_cycles=%llu",
              task->id, 
              task->pkts_to_recv,
              team->workers[1].reliability.to_recv, // rx worker
              task->total_cycles.int64,
-             task->tx_cycles.int64, 
+             task->tx_cycles.int64,
+             task->tx_mcast_send_cycles.int64,
+             task->tx_cq_cycles.int64,
+             task->tx_loop.int64,
              task->rx_cycles.int64,
              task->reliability_cycles.int64);
 #endif

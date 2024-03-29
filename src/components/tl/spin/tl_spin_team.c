@@ -226,8 +226,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 worker->staging_rbuf_mr[j] = ibv_reg_mr(ctx->mcast.pd, worker->staging_rbuf[j], 
                                                         worker->staging_rbuf_len,
                                                         IBV_ACCESS_REMOTE_WRITE |
-                                                        IBV_ACCESS_LOCAL_WRITE  |
-                                                        IBV_ACCESS_REMOTE_READ);
+                                                        IBV_ACCESS_LOCAL_WRITE);
                 if (!worker->staging_rbuf_mr[j]) {
                     tl_error(tl_context->lib, "registration of staging buffer failed");
                     return UCC_ERR_NO_MEMORY;
@@ -240,8 +239,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_spin_team_t, ucc_base_context_t *tl_context,
                 worker->grh_buf_mr[j] = ibv_reg_mr(ctx->mcast.pd, worker->grh_buf[j], 
                                                    worker->grh_buf_len,
                                                    IBV_ACCESS_REMOTE_WRITE |
-                                                   IBV_ACCESS_LOCAL_WRITE  |
-                                                   IBV_ACCESS_REMOTE_READ);
+                                                   IBV_ACCESS_LOCAL_WRITE);
                 if (!worker->grh_buf_mr[j]) {
                     tl_error(tl_context->lib, "registration of ghr buffer failed");
                     return UCC_ERR_NO_MEMORY;

@@ -53,7 +53,16 @@ static ucc_status_t ucc_tl_spin_allgather_start(ucc_coll_task_t *coll_task)
     if (status != UCC_OK) {
         return status;
     }
-
+    if (!UCC_IS_INPLACE(task->super.bargs.args)) {
+        status = ucc_mc_memcpy(PTR_OFFSET(task->dst_ptr, task->src_buf_size * UCC_TL_TEAM_RANK(team)),
+                               task->src_ptr,
+                               task->src_buf_size,
+                               task->super.bargs.args.dst.info.mem_type, 
+                               task->super.bargs.args.dst.info.mem_type);
+        if (ucc_unlikely(UCC_OK != status)) {
+            return status;
+        }
+    }
     coll_task->status = UCC_INPROGRESS;
     tl_debug(UCC_TASK_LIB(task), "start coll task ptr=%p tgid=%u", task, task->id);
     return ucc_progress_queue_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);

@@ -170,7 +170,16 @@ ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx, ucc_tl_spin_t
     packed_chunk_id.chunk_metadata.task_id  = cur_task->id;
     packed_chunk_id.chunk_metadata.chunk_id = cur_task->start_chunk_id;
 
+    while (!cur_task->tx_start) {}
+
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    TSC_START_GLOBAL(cur_task->tx_loop);
+#endif
     for (i = 0; i < cur_task->n_batches; i++) {
+
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_START_LOCAL(cur_task->tmp_counter);
+#endif
         ib_qp_ud_post_mcast_send_batch(ctx->qps[0], ctx->ahs[0],
                                        ctx->swrs[0], ctx->ssges[0],
                                        cur_task->cached_sbuf_mkey->mr,
@@ -178,12 +187,29 @@ ucc_tl_spin_coll_worker_tx_handler(ucc_tl_spin_worker_info_t *ctx, ucc_tl_spin_t
                                        ctx->ctx->mcast.mtu,
                                        ctx->ctx->cfg.mcast_tx_batch_sz,
                                        packed_chunk_id, 0);
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_STOP(cur_task->tmp_counter);
+        cur_task->tx_mcast_send_cycles.int64 += cur_task->tmp_counter.int64;
+#endif
+
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_START_LOCAL(cur_task->tmp_counter);
+#endif
         ncomps = ib_cq_poll(ctx->cq, 1, &wc); // only last packet in batch reports CQe
+
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+        TSC_STOP(cur_task->tmp_counter);
+        cur_task->tx_cq_cycles.int64 += cur_task->tmp_counter.int64;
+#endif
+
         ucc_assert_always(ncomps == 1);
         buf                      += cur_task->batch_bsize;
         remaining_work           -= cur_task->batch_bsize;
         packed_chunk_id.chunk_metadata.chunk_id += ctx->ctx->cfg.mcast_tx_batch_sz;
     }
+#ifdef UCC_TL_SPIN_PROFILE_TASK
+    TSC_STOP(cur_task->tx_loop);
+#endif
 
     if (cur_task->last_batch_size) {
         ib_qp_ud_post_mcast_send_batch(ctx->qps[0], ctx->ahs[0], 

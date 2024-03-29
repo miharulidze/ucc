@@ -276,9 +276,13 @@ typedef struct ucc_tl_spin_task {
     ucc_tl_spin_rcache_region_t *cached_sbuf_mkey;
     ucc_tl_spin_rcache_region_t *cached_rbuf_mkey;
 #ifdef UCC_TL_SPIN_PROFILE_TASK
+    tsc_counter                  tmp_counter;
     tsc_counter                  total_cycles;
     tsc_counter                  rx_cycles;
     tsc_counter                  tx_cycles;
+    tsc_counter                  tx_mcast_send_cycles;
+    tsc_counter                  tx_cq_cycles;
+    tsc_counter                  tx_loop;
     tsc_counter                  reliability_cycles;
     int                          tx_collected;
     int                          rx_collected;
